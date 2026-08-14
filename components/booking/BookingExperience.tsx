@@ -22,7 +22,7 @@ import {
   bookingServices,
   bookingStaff,
   getService,
-  getStaff,
+  getStaffDisplayName,
   minutesToTime,
   serviceCategories,
   type BookingService,
@@ -60,10 +60,10 @@ const copy = {
     unavailable: "غير متاح",
     dateTitle: "اختر اليوم والوقت",
     date: "التاريخ",
-    calendarHint: "كل أشهر السنة أمامك — الأيام المنتهية تختفي تلقائيًا",
+    calendarHint: "اضغط على التاريخ واختر اليوم المناسب — الأوقات تظهر تلقائيًا",
     weekdays: ["أحد", "اثن", "ثلا", "أربع", "خميس", "جمعة", "سبت"],
     datePrompt: "اختر يومًا من التقويم ثم اعرض الأوقات المتاحة.",
-    find: "عرض الأوقات المتاحة",
+    find: "تغيير اليوم",
     noSlots: "لا توجد أوقات تستوعب هذا الحجز في اليوم المختار. جرّب يومًا آخر أو مختصًا متاحًا.",
     schedule: "ترتيب الموعد",
     person: "شخص",
@@ -86,8 +86,8 @@ const copy = {
     loading: "لحظة واحدة…",
     error: "تعذر إكمال الطلب. راجع البيانات وحاول مرة أخرى.",
     slotGone: "هذا الوقت حُجز للتو. اختر وقتًا آخر من القائمة.",
-    policy: "الحجز مفتوح حتى 30 دقيقة قبل الموعد · آخر بداية حجز 11:00 مساءً · لا يوجد دفع إلكتروني.",
-    daily: "يوميًا · من 12:00 ظهرًا · آخر موعد 11:00 مساءً",
+    policy: "الحجز مفتوح حتى 30 دقيقة قبل الموعد · الدوام يوميًا من 11:00 صباحًا إلى 10:00 مساءً · لا يوجد دفع إلكتروني.",
+    daily: "يوميًا · 11:00 صباحًا — 10:00 مساءً",
     duration: "دقيقة",
     hourly: "حجز على رأس كل ساعة",
     selectAll: "أكمل اختيارات جميع الأشخاص للمتابعة.",
@@ -114,10 +114,10 @@ const copy = {
     unavailable: "Unavailable",
     dateTitle: "Choose your date and time",
     date: "Date",
-    calendarHint: "A rolling year — past days disappear automatically",
+    calendarHint: "Tap the date, choose your day and available times appear automatically",
     weekdays: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
     datePrompt: "Choose a day from the calendar, then view the available times.",
-    find: "Show available times",
+    find: "Change date",
     noSlots: "No time can fit the complete booking on this date. Try another day or an available specialist.",
     schedule: "Appointment schedule",
     person: "Guest",
@@ -140,8 +140,8 @@ const copy = {
     loading: "One moment…",
     error: "We couldn’t complete the request. Check the details and try again.",
     slotGone: "That time was just booked. Please choose another slot.",
-    policy: "Book up to 30 minutes before · latest appointment starts at 11:00 PM · no online payment.",
-    daily: "Daily · from 12:00 PM · latest appointment 11:00 PM",
+    policy: "Book up to 30 minutes before · open daily from 11:00 AM to 10:00 PM · no online payment.",
+    daily: "Daily · 11:00 AM — 10:00 PM",
     duration: "min",
     hourly: "Starts on the hour",
     selectAll: "Complete every guest’s selection to continue.",
@@ -162,31 +162,6 @@ function displayDate(date: string, lang: Locale) {
   return new Intl.DateTimeFormat(lang === "ar" ? "ar-JO" : "en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: BOOKING_RULES.timezone }).format(new Date(`${date}T12:00:00+03:00`));
 }
 
-function monthStart(date: string, offset = 0) {
-  const [year, month] = date.split("-").map(Number);
-  const monthIndex = month - 1 + offset;
-  const nextYear = year + Math.floor(monthIndex / 12);
-  const nextMonth = ((monthIndex % 12) + 12) % 12;
-  return `${nextYear}-${String(nextMonth + 1).padStart(2, "0")}-01`;
-}
-
-function displayMonth(date: string, lang: Locale) {
-  return new Intl.DateTimeFormat(lang === "ar" ? "ar-JO" : "en-GB", { month: "long", year: "numeric", timeZone: BOOKING_RULES.timezone }).format(new Date(`${date}T12:00:00+03:00`));
-}
-
-function calendarCells(monthDate: string, minDate: string, maxDate: string) {
-  const [year, month] = monthDate.split("-").map(Number);
-  const leading = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
-  const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const cells: Array<string | null> = Array.from({ length: leading }, () => null);
-  for (let day = 1; day <= days; day += 1) {
-    const option = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    cells.push(option < minDate || option > maxDate ? null : option);
-  }
-  while (cells.length % 7 !== 0) cells.push(null);
-  return cells;
-}
-
 function safeError(value: unknown) {
   return value instanceof Error ? value.message : "UNKNOWN_ERROR";
 }
@@ -196,7 +171,8 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
   const [step, setStep] = useState(0);
   const [catalogStaff, setCatalogStaff] = useState<AvailabilityStaff[]>(bookingStaff.map((member) => ({ ...member, status: "available" })));
   const [catalogServices, setCatalogServices] = useState<AvailabilityService[]>(bookingServices.map((service) => ({ ...service, status: "available" })));
-  const [guests, setGuests] = useState<Guest[]>([{ serviceId: initialServiceId || "haircut-beard", staffId: "any", label: "" }]);
+  const initialSelectedService = initialServiceId || "haircut-beard";
+  const [guests, setGuests] = useState<Guest[]>([{ serviceId: initialSelectedService, staffId: getService(initialSelectedService)?.specialty === "skin" ? "skin-specialist" : "any", label: "" }]);
   const [date, setDate] = useState(todayInAmman());
   const [slots, setSlots] = useState<Slot[]>([]);
   const [searchedSlots, setSearchedSlots] = useState(false);
@@ -208,6 +184,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const contentRef = useRef<HTMLDivElement>(null);
+  const dateInputRef = useRef<HTMLInputElement>(null);
   const stepRef = useRef(0);
   const onCloseRef = useRef(onClose);
 
@@ -271,7 +248,6 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
   }, [open, step, result]);
 
   const maxDate = addDays(todayInAmman(), BOOKING_RULES.bookingHorizonDays);
-  const calendarMonths = useMemo(() => Array.from({ length: 13 }, (_, index) => monthStart(todayInAmman(), index)), []);
   const selectedServices = useMemo(() => guests.map((guest) => getService(guest.serviceId)).filter(Boolean) as BookingService[], [guests]);
 
   const selectDate = (nextDate: string) => {
@@ -280,6 +256,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
     setSearchedSlots(false);
     setSelectedSlot(null);
     setError("");
+    void findSlots(nextDate);
   };
 
   const handleAtmosphereMove = (event: ReactPointerEvent<HTMLElement>) => {
@@ -300,7 +277,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
     setGuests((current) => current.map((guest, guestIndex) => {
       if (guestIndex !== index) return guest;
       const next = { ...guest, ...patch };
-      if (patch.serviceId) next.staffId = "any";
+      if (patch.serviceId) next.staffId = getService(patch.serviceId)?.specialty === "skin" ? "skin-specialist" : "any";
       return next;
     }));
     setSlots([]);
@@ -355,10 +332,15 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
     setError("");
     if (step === 0 && guests.some((guest) => !guest.serviceId)) return setError(t.selectAll);
     if (step === 1 && guests.some((guest) => !guest.staffId)) return setError(t.selectAll);
+    if (step === 1) {
+      navigateToStep(2);
+      void findSlots(date);
+      return;
+    }
     navigateToStep(stepRef.current + 1);
   };
 
-  const findSlots = async () => {
+  async function findSlots(targetDate = date) {
     setBusy(true);
     setSearchedSlots(true);
     setError("");
@@ -367,7 +349,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
       const response = await fetch("/api/booking/availability", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date, guests }),
+        body: JSON.stringify({ date: targetDate, guests }),
       });
       const data = await response.json() as { error?: string; slots?: Slot[] };
       if (!response.ok) throw new Error(data.error || "AVAILABILITY_ERROR");
@@ -377,7 +359,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
     } finally {
       setBusy(false);
     }
-  };
+  }
 
   const sendOtp = async () => {
     if (!person.firstName.trim() || !person.lastName.trim() || person.phone.replace(/\D/g, "").length < 9) {
@@ -466,7 +448,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
       <section className="booking-panel" dir={lang === "ar" ? "rtl" : "ltr"} data-lenis-prevent onPointerMove={handleAtmosphereMove} onPointerLeave={resetAtmosphere}>
         <div className="booking-atmosphere" aria-hidden="true">
           <span className="booking-depth-grid" />
-          <div className="booking-3d-stage"><i className="booking-orbit orbit-a" /><i className="booking-orbit orbit-b" /><i className="booking-orbit orbit-c" /><b className="booking-3d-core" /></div>
+          <div className="booking-3d-stage"><i className="booking-orbit orbit-a" /><i className="booking-orbit orbit-b" /><i className="booking-orbit orbit-c" /><i className="booking-ribbon ribbon-a" /><i className="booking-ribbon ribbon-b" /><i className="booking-ribbon ribbon-c" /></div>
           <span className="booking-light light-red" /><span className="booking-light light-blue" />
         </div>
         <header className="booking-header">
@@ -500,7 +482,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
               <div className="booking-code"><small>{t.code}</small><strong>{result.bookingCode}</strong></div>
               <div className="success-schedule">
                 {result.assignments.map((item) => (
-                  <div key={`${item.guestIndex}-${item.staffId}`}><span>{getService(item.serviceId)?.name[lang]}</span><strong>{getStaff(item.staffId)?.name} · {minutesToTime(item.startMinute, lang)}</strong></div>
+                  <div key={`${item.guestIndex}-${item.staffId}`}><span>{getService(item.serviceId)?.name[lang]}</span><strong>{getStaffDisplayName(item.staffId, lang)} · {minutesToTime(item.startMinute, lang)}</strong></div>
                 ))}
               </div>
               <div className="success-actions">
@@ -537,7 +519,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
                             const disabled = service.status === "disabled" || (service.status === "off_today" && (!service.status_date || service.status_date === date));
                             return (
                               <button type="button" key={service.id} disabled={disabled} className={guest.serviceId === service.id ? "active" : ""} onClick={() => updateGuest(index, { serviceId: service.id })}>
-                                <span><strong>{service.name[lang]}</strong><small>{service.showDuration === false ? t.hourly : `${service.durationMinutes} ${t.duration}`}</small></span><b>{disabled ? (service.status === "off_today" ? t.off : t.unavailable) : service.price[lang]}</b>
+                                <span><strong>{service.name[lang]}</strong><small>{service.showDuration === false ? t.hourly : `${service.durationMinutes} ${t.duration}`}</small>{service.details && <em>{service.details[lang]}</em>}</span><b>{disabled ? (service.status === "off_today" ? t.off : t.unavailable) : service.price[lang]}</b>
                               </button>
                             );
                           })}
@@ -557,15 +539,15 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
                       <article className="staff-guest" key={`staff-guest-${index}`}>
                         <div className="staff-guest-head"><span>{t.guest} {index + 1}</span><strong>{service.name[lang]}</strong></div>
                         <div className="staff-grid">
-                          <button type="button" className={`staff-pick any ${guest.staffId === "any" ? "active" : ""}`} onClick={() => updateGuest(index, { staffId: "any" })}>
+                          {service.specialty !== "skin" && <button type="button" className={`staff-pick any ${guest.staffId === "any" ? "active" : ""}`} onClick={() => updateGuest(index, { staffId: "any" })}>
                             <span className="staff-avatar any"><Sparkles size={26} /></span><strong>{t.any}</strong><small>{t.anyHint}</small>
-                          </button>
+                          </button>}
                           {availableStaffFor(guest.serviceId).map((member) => {
                             const unavailable = member.status === "disabled" || (member.status === "off_today" && (!member.status_date || member.status_date === date));
                             return (
                               <button type="button" key={member.id} disabled={unavailable} className={`staff-pick ${guest.staffId === member.id ? "active" : ""} ${unavailable ? "unavailable" : ""} ${member.breakNow ? "on-break" : ""}`} onClick={() => updateGuest(index, { staffId: member.id })}>
                                 <span className="staff-avatar">{member.image ? <img src={member.image} alt="" /> : <b>{member.name.slice(0, 2)}</b>}</span>
-                                <strong>{member.name}</strong><small>{unavailable ? (member.status === "off_today" ? t.off : t.unavailable) : member.breakNow ? t.breakNow : member.role[lang]}</small>
+                                <strong>{getStaffDisplayName(member.id, lang)}</strong><small>{unavailable ? (member.status === "off_today" ? t.off : t.unavailable) : member.breakNow ? t.breakNow : member.role[lang]}</small>
                               </button>
                             );
                           })}
@@ -578,19 +560,16 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
 
               {step === 2 && (
                 <div className="time-selection">
-                  <div className="calendar-year-shell">
-                    <div className="calendar-year-heading"><CalendarDays size={20} /><div><strong>{lang === "ar" ? "تقويم الحجز السنوي" : "Rolling booking calendar"}</strong><small>{t.calendarHint}</small></div></div>
-                    <div className="calendar-year-scroll" data-lenis-prevent>
-                      {calendarMonths.map((month) => {
-                        const days = calendarCells(month, todayInAmman(), maxDate);
-                        return <section className="booking-calendar" key={month}><div className="calendar-month-title"><strong>{displayMonth(month, lang)}</strong></div><div className="calendar-weekdays">{t.weekdays.map((weekday) => <span key={`${month}-${weekday}`}>{weekday}</span>)}</div><div className="calendar-days">{days.map((option, index) => option ? <button type="button" key={option} className={`${date === option ? "active" : ""} ${option === todayInAmman() ? "today" : ""}`} onClick={() => selectDate(option)}><span>{Number(option.slice(-2))}</span></button> : <span className="calendar-blank" key={`${month}-blank-${index}`} />)}</div></section>;
-                      })}
-                    </div>
-                  </div>
-                  <div className="date-control"><CalendarDays size={20} /><label><span>{t.date}</span><strong>{displayDate(date, lang)}</strong></label><button type="button" onClick={findSlots} disabled={busy}>{busy ? <LoaderCircle className="spin" size={18} /> : <Clock3 size={18} />}{t.find}</button></div>
-                  {slots.length > 0 && <div className="slot-grid">{slots.map((slot) => <button type="button" key={slot.startMinute} className={selectedSlot?.startMinute === slot.startMinute ? "active" : ""} onClick={() => setSelectedSlot(slot)}><strong>{minutesToTime(slot.startMinute, lang)}</strong><small>{displayDate(date, lang)}</small></button>)}</div>}
+                  <label className="compact-date-picker" onClick={() => dateInputRef.current?.showPicker?.()}>
+                    <CalendarDays size={22} />
+                    <span><small>{t.date}</small><strong>{displayDate(date, lang)}</strong><em>{t.calendarHint}</em></span>
+                    <b>{t.find}</b>
+                    <input ref={dateInputRef} type="date" value={date} min={todayInAmman()} max={maxDate} aria-label={t.date} onChange={(event) => event.target.value && selectDate(event.target.value)} />
+                  </label>
+                  {busy && <div className="time-empty"><LoaderCircle className="spin" size={28} /><p>{t.loading}</p></div>}
+                  {!busy && slots.length > 0 && <div className="slot-grid">{slots.map((slot) => <button type="button" key={slot.startMinute} className={selectedSlot?.startMinute === slot.startMinute ? "active" : ""} onClick={() => setSelectedSlot(slot)}><strong>{minutesToTime(slot.startMinute, lang)}</strong><small>{displayDate(date, lang)}</small></button>)}</div>}
                   {!busy && slots.length === 0 && <div className="time-empty">{searchedSlots ? <Clock3 size={28} /> : <CalendarDays size={28} />}<p>{searchedSlots ? t.noSlots : t.datePrompt}</p></div>}
-                  {selectedSlot && <div className="schedule-preview"><h3>{t.schedule}</h3>{selectedSlot.assignments.map((item) => <div key={`${item.guestIndex}-${item.staffId}`}><span>{item.label || `${t.person} ${item.guestIndex + 1}`}<small>{getService(item.serviceId)?.name[lang]}</small></span><strong>{getStaff(item.staffId)?.name}<small>{minutesToTime(item.startMinute, lang)} — {minutesToTime(item.endMinute, lang)}</small></strong></div>)}</div>}
+                  {selectedSlot && <div className="schedule-preview"><h3>{t.schedule}</h3>{selectedSlot.assignments.map((item) => <div key={`${item.guestIndex}-${item.staffId}`}><span>{item.label || `${t.person} ${item.guestIndex + 1}`}<small>{getService(item.serviceId)?.name[lang]}</small></span><strong>{getStaffDisplayName(item.staffId, lang)}<small>{minutesToTime(item.startMinute, lang)} — {minutesToTime(item.endMinute, lang)}</small></strong></div>)}</div>}
                 </div>
               )}
 

@@ -2257,7 +2257,11 @@ body.booking-open {
 .booking-orbit.orbit-a { color: rgba(198,32,39,.3); border-color: rgba(198,32,39,.22); animation: booking-orbit-a 15s ease-in-out infinite alternate; }
 .booking-orbit.orbit-b { inset: 25%; color: rgba(81,141,177,.25); animation: booking-orbit-b 19s ease-in-out infinite alternate; }
 .booking-orbit.orbit-c { inset: 34%; color: rgba(255,255,255,.18); border-style: dashed; animation: booking-orbit-c 12s linear infinite; }
-.booking-3d-core { position: absolute; top: 50%; left: 50%; width: 17%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle at 34% 27%, #f77375 0 5%, #c62027 24%, #5b080c 69%, #07131c 100%); box-shadow: 0 0 0 17px rgba(198,32,39,.035), 0 0 70px rgba(198,32,39,.28), inset -15px -16px 28px rgba(0,0,0,.45); transform: translate(-50%,-50%) translateZ(74px); animation: booking-core-pulse 4.8s ease-in-out infinite; will-change: transform; }
+.booking-ribbon { position: absolute; left: 8%; width: 78%; height: 17%; border: 1px solid rgba(255,255,255,.12); background: linear-gradient(100deg, transparent 2%, rgba(198,32,39,.18) 24%, rgba(198,32,39,.66) 49%, rgba(16,35,51,.72) 74%, transparent 98%); clip-path: polygon(0 36%, 28% 8%, 72% 20%, 100% 68%, 73% 92%, 26% 76%); transform-style: preserve-3d; mix-blend-mode: screen; will-change: transform, opacity; }
+.booking-ribbon::after { position: absolute; inset: 23% 8%; border-top: 1px solid rgba(255,255,255,.26); border-bottom: 1px solid rgba(198,32,39,.34); content: ""; }
+.booking-ribbon.ribbon-a { top: 31%; animation: booking-ribbon-a 9s ease-in-out infinite alternate; }
+.booking-ribbon.ribbon-b { top: 48%; width: 62%; opacity: .58; background: linear-gradient(102deg, transparent, rgba(40,96,132,.7), rgba(198,32,39,.48), transparent); animation: booking-ribbon-b 12s ease-in-out -4s infinite alternate; }
+.booking-ribbon.ribbon-c { top: 61%; left: 19%; width: 54%; height: 12%; opacity: .38; background: linear-gradient(100deg, transparent, rgba(255,255,255,.28), rgba(198,32,39,.46), transparent); animation: booking-ribbon-c 7s ease-in-out -2s infinite alternate; }
 .booking-light { position: absolute; border-radius: 50%; filter: blur(2px); opacity: .35; will-change: transform; }
 .booking-light.light-red { top: 12%; right: -7%; width: 250px; height: 250px; background: radial-gradient(circle, rgba(198,32,39,.25), transparent 67%); animation: booking-light-float 9s ease-in-out infinite alternate; }
 .booking-light.light-blue { right: 18%; bottom: -13%; width: 330px; height: 330px; background: radial-gradient(circle, rgba(45,105,143,.2), transparent 69%); animation: booking-light-float 12s ease-in-out -3s infinite alternate-reverse; }
@@ -2321,6 +2325,7 @@ body.booking-open {
 .service-picks button span { display: flex; flex-direction: column; gap: 5px; }
 .service-picks button strong { font-size: 14px; font-weight: 600; }
 .service-picks button small { color: rgba(255,255,255,.52); font-size: 10px; font-weight: 400; }
+.service-picks button em { max-width: 430px; color: rgba(255,255,255,.66); font-size: 9px; font-style: normal; font-weight: 400; line-height: 1.65; }
 .service-picks button b { color: white; font-size: 12px; font-weight: 600; }
 .add-guest { display: inline-flex; min-height: 50px; align-items: center; justify-content: center; gap: 8px; border: 1px dashed rgba(255,255,255,.25); background: rgba(255,255,255,.02); color: white; cursor: pointer; }
 
@@ -2346,6 +2351,14 @@ body.booking-open {
 .staff-pick > small { max-width: 145px; color: rgba(255,255,255,.48); font-size: 7px; line-height: 1.55; }
 
 .time-selection { display: grid; gap: 24px; }
+.compact-date-picker { position: relative; display: grid; min-height: 92px; grid-template-columns: 44px minmax(0,1fr) auto; align-items: center; gap: 14px; padding: 17px 20px; overflow: hidden; border: 1px solid rgba(255,255,255,.17); background: linear-gradient(120deg, rgba(198,32,39,.17), rgba(255,255,255,.035) 42%, rgba(28,75,103,.12)); box-shadow: 0 24px 70px rgba(0,0,0,.17); cursor: pointer; }
+.compact-date-picker > svg { color: #ff666b; }
+.compact-date-picker > span { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.compact-date-picker small { color: rgba(255,255,255,.46); font-size: 8px; }
+.compact-date-picker strong { font-size: 17px; font-weight: 600; }
+.compact-date-picker em { overflow: hidden; color: rgba(255,255,255,.48); font-size: 8px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.compact-date-picker > b { padding: 10px 14px; border: 1px solid rgba(255,255,255,.21); background: rgba(4,13,19,.36); font-size: 9px; font-weight: 600; }
+.compact-date-picker input { position: absolute; z-index: 2; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; color-scheme: dark; }
 .calendar-year-shell { overflow: hidden; border: 1px solid rgba(255,255,255,.15); background: rgba(3,11,16,.36); box-shadow: 0 28px 80px rgba(0,0,0,.18); }
 .calendar-year-heading { display: flex; min-height: 72px; align-items: center; gap: 13px; padding: 14px 18px; border-bottom: 1px solid rgba(255,255,255,.12); background: linear-gradient(90deg, rgba(198,32,39,.18), rgba(255,255,255,.025)); }
 .calendar-year-heading > div { display: flex; flex-direction: column; gap: 4px; }
@@ -2665,7 +2678,9 @@ body.booking-open {
 @keyframes booking-orbit-a { from { transform: rotateX(66deg) rotateZ(-12deg) translateZ(25px); } to { transform: rotateX(74deg) rotateZ(34deg) translateZ(56px); } }
 @keyframes booking-orbit-b { from { transform: rotateY(67deg) rotateZ(18deg) translateZ(-10px); } to { transform: rotateY(76deg) rotateZ(-29deg) translateZ(43px); } }
 @keyframes booking-orbit-c { from { transform: rotateX(38deg) rotateY(59deg) rotateZ(0deg) translateZ(74px); } to { transform: rotateX(38deg) rotateY(59deg) rotateZ(360deg) translateZ(74px); } }
-@keyframes booking-core-pulse { 50% { transform: translate(-50%,-50%) translateZ(92px) scale(1.08); } }
+@keyframes booking-ribbon-a { from { transform: translate3d(-8%,5%,42px) rotateX(58deg) rotateZ(-12deg) scaleX(.92); opacity: .42; } to { transform: translate3d(17%,-13%,118px) rotateX(67deg) rotateZ(17deg) scaleX(1.08); opacity: .82; } }
+@keyframes booking-ribbon-b { from { transform: translate3d(18%,-20%,-28px) rotateY(54deg) rotateZ(24deg); } to { transform: translate3d(-14%,24%,76px) rotateY(68deg) rotateZ(-18deg); } }
+@keyframes booking-ribbon-c { from { transform: translate3d(-12%,10%,86px) rotateX(36deg) rotateY(-32deg); } to { transform: translate3d(28%,-18%,26px) rotateX(64deg) rotateY(21deg); } }
 @keyframes booking-light-float { to { transform: translate3d(-36px,29px,0) scale(1.12); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -2715,6 +2730,10 @@ body.booking-open {
   .staff-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; }
   .staff-pick { min-height: 168px; padding: 10px 6px; }
   .staff-avatar { width: 68px; height: 82px; }
+  .compact-date-picker { min-height: 82px; grid-template-columns: 35px minmax(0,1fr); gap: 10px; padding: 13px; }
+  .compact-date-picker > b { grid-column: 1 / -1; padding: 8px 11px; text-align: center; }
+  .compact-date-picker strong { font-size: 14px; }
+  .compact-date-picker em { font-size: 7px; }
   .date-control { grid-template-columns: 26px 1fr; }
   .date-control button { grid-column: 1 / -1; }
   .slot-grid { grid-template-columns: repeat(3,minmax(0,1fr)); }

@@ -1,4 +1,31 @@
-# vinext-starter
+# MJ Hair Salon Experience
+
+High-end bilingual MJ Hair Salon website, online booking system, WhatsApp verification/notifications, and an installable staff operations PWA.
+
+## Product routes
+
+- `/` — public AR/EN salon experience and booking concierge
+- `/staff` — private username/password login for Mustafa and each employee
+- `/staff/setup` — protected first-time Mustafa account setup
+
+The owner account can see every schedule, manage services and team availability, add staff breaks, and create/reset employee accounts. Employee accounts can only see their own customers and phone numbers, update their own availability, and block break periods. Passwords are PBKDF2-hashed; sessions use secure HTTP-only cookies.
+
+Booking starts at 12:00 PM. The latest visible start is 11:00 PM, and the selected service must still fit before midnight. General starts use a 30-minute grid; packages marked as hourly use a 60-minute grid. The calendar is a rolling 365-day view.
+
+## WhatsApp configuration
+
+The runtime supports these environment variables:
+
+- `WHATSAPP_ACCESS_TOKEN`
+- `WHATSAPP_PHONE_NUMBER_ID`
+- `WHATSAPP_AUTH_TEMPLATE`
+- `WHATSAPP_CUSTOMER_TEMPLATE`
+- `WHATSAPP_OWNER_TEMPLATE`
+- `WHATSAPP_STAFF_TEMPLATE` (falls back to the owner template)
+
+Mustafa can save each employee's WhatsApp number while creating their account. Booking notifications are then sent to the assigned employee as well as the salon/owner.
+
+## Stack
 
 A clean full-stack starter running on
 [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and

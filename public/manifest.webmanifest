@@ -1,0 +1,17 @@
+{
+  "name": "MJ Control — Hair Salon Operations",
+  "short_name": "MJ Control",
+  "description": "مواعيد وحالة فريق MJ Hair Salon",
+  "start_url": "/staff",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07131c",
+  "theme_color": "#07131c",
+  "lang": "ar",
+  "dir": "rtl",
+  "icons": [
+    { "src": "/assets/mj-control-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/assets/mj-control-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

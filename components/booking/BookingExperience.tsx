@@ -6,8 +6,6 @@ import {
   ArrowRight,
   CalendarDays,
   Check,
-  ChevronLeft,
-  ChevronRight,
   Clock3,
   LoaderCircle,
   Minus,
@@ -32,12 +30,12 @@ import {
   type Locale,
 } from "@/lib/booking-config";
 
-type AvailabilityStaff = BookingStaff & { status: "available" | "off_today" | "disabled"; status_date?: string | null };
+type AvailabilityStaff = BookingStaff & { status: "available" | "off_today" | "disabled"; status_date?: string | null; breakNow?: boolean };
 type AvailabilityService = BookingService & { status: "available" | "off_today" | "disabled"; status_date?: string | null };
 type Guest = { serviceId: string; staffId: string; label: string };
 type Assignment = { guestIndex: number; serviceId: string; staffId: string; startMinute: number; endMinute: number; label: string };
 type Slot = { startMinute: number; assignments: Assignment[] };
-type BookingResult = { bookingCode: string; manageToken: string; assignments: Assignment[]; salonWhatsAppUrl: string };
+type BookingResult = { bookingCode: string; assignments: Assignment[]; salonWhatsAppUrl: string };
 
 const copy = {
   ar: {
@@ -58,12 +56,11 @@ const copy = {
     any: "أي مختص متاح",
     anyHint: "نختار لك أول مختص متاح ونؤكد اسمه فورًا.",
     off: "إجازة اليوم",
+    breakNow: "بريك الآن",
     unavailable: "غير متاح",
     dateTitle: "اختر اليوم والوقت",
     date: "التاريخ",
-    calendarHint: "الحجز متاح حتى 30 يومًا مقدمًا",
-    previousMonth: "الشهر السابق",
-    nextMonth: "الشهر التالي",
+    calendarHint: "كل أشهر السنة أمامك — الأيام المنتهية تختفي تلقائيًا",
     weekdays: ["أحد", "اثن", "ثلا", "أربع", "خميس", "جمعة", "سبت"],
     datePrompt: "اختر يومًا من التقويم ثم اعرض الأوقات المتاحة.",
     find: "عرض الأوقات المتاحة",
@@ -82,17 +79,17 @@ const copy = {
     otpDemo: "وضع التجربة: استخدم الرمز الظاهر أدناه. عند ربط حساب Meta سيصل الرمز على واتساب تلقائيًا.",
     confirm: "تأكيد الحجز",
     confirmed: "تم تأكيد موعدك.",
-    confirmedBody: "موعدك أصبح مسجلًا مباشرة لدى MJ. احتفظ برقم الحجز ورابط الإدارة.",
+    confirmedBody: "موعدك أصبح مسجلًا مباشرة لدى MJ، ووصلت تفاصيله إلى المختص.",
     code: "رقم الحجز",
-    manage: "تعديل أو إلغاء الموعد",
     whatsapp: "فتح واتساب MJ",
     close: "إغلاق",
     loading: "لحظة واحدة…",
     error: "تعذر إكمال الطلب. راجع البيانات وحاول مرة أخرى.",
     slotGone: "هذا الوقت حُجز للتو. اختر وقتًا آخر من القائمة.",
-    policy: "الحجز مفتوح حتى 30 دقيقة قبل الموعد · التعديل أو الإلغاء حتى ساعة قبل الموعد وبموافقة الصالون.",
-    daily: "يوميًا · 11:00 صباحًا — 10:00 مساءً",
+    policy: "الحجز مفتوح حتى 30 دقيقة قبل الموعد · آخر بداية حجز 11:00 مساءً · لا يوجد دفع إلكتروني.",
+    daily: "يوميًا · من 12:00 ظهرًا · آخر موعد 11:00 مساءً",
     duration: "دقيقة",
+    hourly: "حجز على رأس كل ساعة",
     selectAll: "أكمل اختيارات جميع الأشخاص للمتابعة.",
   },
   en: {
@@ -113,12 +110,11 @@ const copy = {
     any: "Any available specialist",
     anyHint: "We’ll assign the first available specialist and confirm the name instantly.",
     off: "Off today",
+    breakNow: "On break",
     unavailable: "Unavailable",
     dateTitle: "Choose your date and time",
     date: "Date",
-    calendarHint: "Booking is open up to 30 days ahead",
-    previousMonth: "Previous month",
-    nextMonth: "Next month",
+    calendarHint: "A rolling year — past days disappear automatically",
     weekdays: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
     datePrompt: "Choose a day from the calendar, then view the available times.",
     find: "Show available times",
@@ -137,17 +133,17 @@ const copy = {
     otpDemo: "Test mode: use the code shown below. Once Meta is connected, it will arrive on WhatsApp automatically.",
     confirm: "Confirm booking",
     confirmed: "Your appointment is confirmed.",
-    confirmedBody: "MJ has received your booking instantly. Keep your booking number and management link.",
+    confirmedBody: "MJ and your assigned specialist have received your booking instantly.",
     code: "Booking number",
-    manage: "Modify or cancel",
     whatsapp: "Open MJ WhatsApp",
     close: "Close",
     loading: "One moment…",
     error: "We couldn’t complete the request. Check the details and try again.",
     slotGone: "That time was just booked. Please choose another slot.",
-    policy: "Book up to 30 minutes before · changes or cancellations up to one hour before, subject to salon approval.",
-    daily: "Daily · 11:00 AM — 10:00 PM",
+    policy: "Book up to 30 minutes before · latest appointment starts at 11:00 PM · no online payment.",
+    daily: "Daily · from 12:00 PM · latest appointment 11:00 PM",
     duration: "min",
+    hourly: "Starts on the hour",
     selectAll: "Complete every guest’s selection to continue.",
   },
 } as const;
@@ -178,12 +174,15 @@ function displayMonth(date: string, lang: Locale) {
   return new Intl.DateTimeFormat(lang === "ar" ? "ar-JO" : "en-GB", { month: "long", year: "numeric", timeZone: BOOKING_RULES.timezone }).format(new Date(`${date}T12:00:00+03:00`));
 }
 
-function calendarCells(monthDate: string) {
+function calendarCells(monthDate: string, minDate: string, maxDate: string) {
   const [year, month] = monthDate.split("-").map(Number);
   const leading = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
   const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const cells: Array<string | null> = Array.from({ length: leading }, () => null);
-  for (let day = 1; day <= days; day += 1) cells.push(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+  for (let day = 1; day <= days; day += 1) {
+    const option = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    cells.push(option < minDate || option > maxDate ? null : option);
+  }
   while (cells.length % 7 !== 0) cells.push(null);
   return cells;
 }
@@ -199,7 +198,6 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
   const [catalogServices, setCatalogServices] = useState<AvailabilityService[]>(bookingServices.map((service) => ({ ...service, status: "available" })));
   const [guests, setGuests] = useState<Guest[]>([{ serviceId: initialServiceId || "haircut-beard", staffId: "any", label: "" }]);
   const [date, setDate] = useState(todayInAmman());
-  const [visibleMonth, setVisibleMonth] = useState(monthStart(todayInAmman()));
   const [slots, setSlots] = useState<Slot[]>([]);
   const [searchedSlots, setSearchedSlots] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
@@ -210,6 +208,10 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const contentRef = useRef<HTMLDivElement>(null);
+  const stepRef = useRef(0);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -235,10 +237,33 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const activeBookingHistory = (window.history.state as { mjBooking?: boolean } | null)?.mjBooking;
+      onCloseRef.current();
+      if (activeBookingHistory) window.history.go(-(stepRef.current + 1));
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open]);
+
+  useEffect(() => { stepRef.current = step; }, [step]);
+
+  useEffect(() => {
+    if (!open) return;
+    window.history.pushState({ mjBooking: true, step: 0 }, "", window.location.href);
+    const onPopState = (event: PopStateEvent) => {
+      const state = event.state as { mjBooking?: boolean; step?: number } | null;
+      if (state?.mjBooking && Number.isInteger(state.step)) {
+        setStep(Math.max(0, Math.min(4, state.step!)));
+        setError("");
+      } else {
+        onCloseRef.current();
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -246,14 +271,11 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
   }, [open, step, result]);
 
   const maxDate = addDays(todayInAmman(), BOOKING_RULES.bookingHorizonDays);
-  const minMonth = monthStart(todayInAmman());
-  const maxMonth = monthStart(maxDate);
-  const monthDays = useMemo(() => calendarCells(visibleMonth), [visibleMonth]);
+  const calendarMonths = useMemo(() => Array.from({ length: 13 }, (_, index) => monthStart(todayInAmman(), index)), []);
   const selectedServices = useMemo(() => guests.map((guest) => getService(guest.serviceId)).filter(Boolean) as BookingService[], [guests]);
 
   const selectDate = (nextDate: string) => {
     setDate(nextDate);
-    setVisibleMonth(monthStart(nextDate));
     setSlots([]);
     setSearchedSlots(false);
     setSelectedSlot(null);
@@ -309,11 +331,31 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
     return catalogStaff.filter((member) => member.specialty === service?.specialty);
   };
 
+  const navigateToStep = (nextStep: number) => {
+    const bounded = Math.max(0, Math.min(4, nextStep));
+    setStep(bounded);
+    stepRef.current = bounded;
+    window.history.pushState({ mjBooking: true, step: bounded }, "", window.location.href);
+  };
+
+  const navigateBack = () => {
+    if (stepRef.current <= 0) {
+      closeAndReset();
+      return;
+    }
+    window.history.back();
+  };
+
+  const navigateBackTo = (target: number) => {
+    const distance = Math.max(1, stepRef.current - target);
+    window.history.go(-distance);
+  };
+
   const goNext = () => {
     setError("");
     if (step === 0 && guests.some((guest) => !guest.serviceId)) return setError(t.selectAll);
     if (step === 1 && guests.some((guest) => !guest.staffId)) return setError(t.selectAll);
-    setStep((current) => Math.min(4, current + 1));
+    navigateToStep(stepRef.current + 1);
   };
 
   const findSlots = async () => {
@@ -353,7 +395,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
       const data = await response.json() as { error?: string; challenge: { id: string; devCode?: string; delivered: boolean } };
       if (!response.ok) throw new Error(data.error || "OTP_ERROR");
       setChallenge(data.challenge);
-      setStep(4);
+      navigateToStep(4);
     } catch {
       setError(t.error);
     } finally {
@@ -388,7 +430,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
       const message = safeError(caught);
       setError(message === "SLOT_UNAVAILABLE" ? t.slotGone : t.error);
       if (message === "SLOT_UNAVAILABLE") {
-        setStep(2);
+        navigateBackTo(2);
         setSelectedSlot(null);
         void findSlots();
       }
@@ -398,7 +440,10 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
   };
 
   const closeAndReset = () => {
-    onClose();
+    const activeBookingHistory = (window.history.state as { mjBooking?: boolean } | null)?.mjBooking;
+    const rewind = stepRef.current + 1;
+    onCloseRef.current();
+    if (activeBookingHistory) window.history.go(-rewind);
     window.setTimeout(() => {
       setStep(0);
       setSlots([]);
@@ -413,6 +458,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
 
   if (!open) return null;
   const DirectionArrow = lang === "ar" ? ArrowLeft : ArrowRight;
+  const BackArrow = lang === "ar" ? ArrowRight : ArrowLeft;
 
   return (
     <div className="booking-layer" role="dialog" aria-modal="true" aria-labelledby="booking-title" data-lenis-prevent>
@@ -428,13 +474,16 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
             <img src="/assets/mj-logo.svg" alt="MJ Hair Salon" />
             <div><span>{t.eyebrow}</span><small>{t.daily}</small></div>
           </div>
-          <button className="booking-close" type="button" onClick={closeAndReset} aria-label={t.close}><X size={20} /></button>
+          <div className="booking-header-actions">
+            {step > 0 && !result && <button className="booking-step-back" type="button" onClick={navigateBack}><BackArrow size={18} /><span>{t.back}</span></button>}
+            <button className="booking-close" type="button" onClick={closeAndReset} aria-label={t.close}><X size={20} /></button>
+          </div>
         </header>
 
         {!result && (
           <div className="booking-progress" aria-label={lang === "ar" ? "خطوات الحجز" : "Booking steps"}>
             {t.steps.map((label, index) => (
-              <button type="button" key={label} className={`${step === index ? "active" : ""} ${step > index ? "done" : ""}`} onClick={() => index < step && setStep(index)} disabled={index > step}>
+              <button type="button" key={label} className={`${step === index ? "active" : ""} ${step > index ? "done" : ""}`} onClick={() => index < step && navigateBackTo(index)} disabled={index > step}>
                 <span>{step > index ? <Check size={13} /> : index + 1}</span><small>{label}</small>
               </button>
             ))}
@@ -455,9 +504,8 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
                 ))}
               </div>
               <div className="success-actions">
-                <a href={`/manage/${result.manageToken}`} className="booking-primary">{t.manage}<DirectionArrow size={18} /></a>
                 <a href={result.salonWhatsAppUrl} target="_blank" rel="noreferrer" className="booking-secondary"><FaWhatsapp size={18} />{t.whatsapp}</a>
-                <button type="button" className="booking-ghost" onClick={closeAndReset}>{t.close}</button>
+                <button type="button" className="booking-primary" onClick={closeAndReset}>{t.close}<DirectionArrow size={18} /></button>
               </div>
             </div>
           ) : (
@@ -489,7 +537,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
                             const disabled = service.status === "disabled" || (service.status === "off_today" && (!service.status_date || service.status_date === date));
                             return (
                               <button type="button" key={service.id} disabled={disabled} className={guest.serviceId === service.id ? "active" : ""} onClick={() => updateGuest(index, { serviceId: service.id })}>
-                                <span><strong>{service.name[lang]}</strong><small>{service.durationMinutes} {t.duration}</small></span><b>{disabled ? (service.status === "off_today" ? t.off : t.unavailable) : service.price[lang]}</b>
+                                <span><strong>{service.name[lang]}</strong><small>{service.showDuration === false ? t.hourly : `${service.durationMinutes} ${t.duration}`}</small></span><b>{disabled ? (service.status === "off_today" ? t.off : t.unavailable) : service.price[lang]}</b>
                               </button>
                             );
                           })}
@@ -515,9 +563,9 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
                           {availableStaffFor(guest.serviceId).map((member) => {
                             const unavailable = member.status === "disabled" || (member.status === "off_today" && (!member.status_date || member.status_date === date));
                             return (
-                              <button type="button" key={member.id} disabled={unavailable} className={`staff-pick ${guest.staffId === member.id ? "active" : ""} ${unavailable ? "unavailable" : ""}`} onClick={() => updateGuest(index, { staffId: member.id })}>
+                              <button type="button" key={member.id} disabled={unavailable} className={`staff-pick ${guest.staffId === member.id ? "active" : ""} ${unavailable ? "unavailable" : ""} ${member.breakNow ? "on-break" : ""}`} onClick={() => updateGuest(index, { staffId: member.id })}>
                                 <span className="staff-avatar">{member.image ? <img src={member.image} alt="" /> : <b>{member.name.slice(0, 2)}</b>}</span>
-                                <strong>{member.name}</strong><small>{unavailable ? (member.status === "off_today" ? t.off : t.unavailable) : member.role[lang]}</small>
+                                <strong>{member.name}</strong><small>{unavailable ? (member.status === "off_today" ? t.off : t.unavailable) : member.breakNow ? t.breakNow : member.role[lang]}</small>
                               </button>
                             );
                           })}
@@ -530,10 +578,14 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
 
               {step === 2 && (
                 <div className="time-selection">
-                  <div className="booking-calendar">
-                    <div className="calendar-toolbar"><button type="button" aria-label={t.previousMonth} disabled={visibleMonth <= minMonth} onClick={() => setVisibleMonth((current) => monthStart(current, -1))}><ChevronLeft size={19} /></button><div><strong>{displayMonth(visibleMonth, lang)}</strong><small>{t.calendarHint}</small></div><button type="button" aria-label={t.nextMonth} disabled={visibleMonth >= maxMonth} onClick={() => setVisibleMonth((current) => monthStart(current, 1))}><ChevronRight size={19} /></button></div>
-                    <div className="calendar-weekdays">{t.weekdays.map((weekday) => <span key={weekday}>{weekday}</span>)}</div>
-                    <div className="calendar-days">{monthDays.map((option, index) => option ? <button type="button" key={option} disabled={option < todayInAmman() || option > maxDate} className={`${date === option ? "active" : ""} ${option === todayInAmman() ? "today" : ""}`} onClick={() => selectDate(option)}><span>{Number(option.slice(-2))}</span></button> : <span className="calendar-blank" key={`blank-${index}`} />)}</div>
+                  <div className="calendar-year-shell">
+                    <div className="calendar-year-heading"><CalendarDays size={20} /><div><strong>{lang === "ar" ? "تقويم الحجز السنوي" : "Rolling booking calendar"}</strong><small>{t.calendarHint}</small></div></div>
+                    <div className="calendar-year-scroll" data-lenis-prevent>
+                      {calendarMonths.map((month) => {
+                        const days = calendarCells(month, todayInAmman(), maxDate);
+                        return <section className="booking-calendar" key={month}><div className="calendar-month-title"><strong>{displayMonth(month, lang)}</strong></div><div className="calendar-weekdays">{t.weekdays.map((weekday) => <span key={`${month}-${weekday}`}>{weekday}</span>)}</div><div className="calendar-days">{days.map((option, index) => option ? <button type="button" key={option} className={`${date === option ? "active" : ""} ${option === todayInAmman() ? "today" : ""}`} onClick={() => selectDate(option)}><span>{Number(option.slice(-2))}</span></button> : <span className="calendar-blank" key={`${month}-blank-${index}`} />)}</div></section>;
+                      })}
+                    </div>
                   </div>
                   <div className="date-control"><CalendarDays size={20} /><label><span>{t.date}</span><strong>{displayDate(date, lang)}</strong></label><button type="button" onClick={findSlots} disabled={busy}>{busy ? <LoaderCircle className="spin" size={18} /> : <Clock3 size={18} />}{t.find}</button></div>
                   {slots.length > 0 && <div className="slot-grid">{slots.map((slot) => <button type="button" key={slot.startMinute} className={selectedSlot?.startMinute === slot.startMinute ? "active" : ""} onClick={() => setSelectedSlot(slot)}><strong>{minutesToTime(slot.startMinute, lang)}</strong><small>{displayDate(date, lang)}</small></button>)}</div>}
@@ -567,7 +619,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
           <footer className="booking-footer">
             <div className="booking-recap"><UsersRound size={18} /><span>{guests.length} {lang === "ar" ? "شخص" : guests.length === 1 ? "guest" : "guests"}</span>{selectedServices[0] && <><i /><span>{selectedServices[0].name[lang]}</span></>}</div>
             <div className="booking-nav">
-              {step > 0 && <button type="button" className="booking-back" onClick={() => { setStep(step - 1); setError(""); }} disabled={busy}>{t.back}</button>}
+              {step > 0 && <button type="button" className="booking-back" onClick={navigateBack} disabled={busy}>{t.back}</button>}
               {step < 2 && <button type="button" className="booking-primary" onClick={goNext}>{t.continue}<DirectionArrow size={18} /></button>}
               {step === 2 && <button type="button" className="booking-primary" onClick={goNext} disabled={!selectedSlot}>{t.continue}<DirectionArrow size={18} /></button>}
               {step === 3 && <button type="button" className="booking-primary" onClick={sendOtp} disabled={busy}>{busy ? <LoaderCircle className="spin" size={18} /> : <FaWhatsapp size={18} />}{busy ? t.loading : t.sendOtp}</button>}

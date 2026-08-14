@@ -35,6 +35,12 @@ type BusyRow = {
   end_minute: number;
 };
 
+type BreakRow = {
+  staff_id: string;
+  start_minute: number;
+  end_minute: number;
+};
+
 const SALON_WHATSAPP = "962797799677";
 const MUSTAFA_WHATSAPP = "962796152602";
 let schemaReady = false;
@@ -60,7 +66,16 @@ export async function ensureBookingSchema() {
     db.prepare("CREATE TABLE IF NOT EXISTS otp_challenges (id TEXT PRIMARY KEY NOT NULL, phone TEXT NOT NULL, purpose TEXT NOT NULL, booking_id TEXT, code_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, verified_at INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
     db.prepare("CREATE TABLE IF NOT EXISTS manage_sessions (id TEXT PRIMARY KEY NOT NULL, booking_id TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (booking_id) REFERENCES booking_groups(id))"),
     db.prepare("CREATE TABLE IF NOT EXISTS change_requests (id TEXT PRIMARY KEY NOT NULL, booking_id TEXT NOT NULL, type TEXT NOT NULL, requested_date TEXT, requested_start_minute INTEGER, payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'pending', decision_note TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, decided_at TEXT, FOREIGN KEY (booking_id) REFERENCES booking_groups(id))"),
+    db.prepare("CREATE TABLE IF NOT EXISTS staff_breaks (id TEXT PRIMARY KEY NOT NULL, staff_id TEXT NOT NULL, break_date TEXT NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, note TEXT, status TEXT NOT NULL DEFAULT 'active', created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (staff_id) REFERENCES staff_members(id))"),
+    db.prepare("CREATE INDEX IF NOT EXISTS staff_breaks_schedule_idx ON staff_breaks (staff_id, break_date, start_minute, end_minute)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS staff_accounts (id TEXT PRIMARY KEY NOT NULL, staff_id TEXT NOT NULL UNIQUE, username TEXT NOT NULL UNIQUE, password_salt TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'staff', active INTEGER NOT NULL DEFAULT 1, failed_attempts INTEGER NOT NULL DEFAULT 0, locked_until INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (staff_id) REFERENCES staff_members(id))"),
+    db.prepare("CREATE TABLE IF NOT EXISTS staff_sessions (id TEXT PRIMARY KEY NOT NULL, account_id TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, expires_at INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (account_id) REFERENCES staff_accounts(id))"),
+    db.prepare("CREATE INDEX IF NOT EXISTS staff_sessions_token_idx ON staff_sessions (token_hash, expires_at)"),
   ]);
+  const staffColumns = await db.prepare("PRAGMA table_info(staff_members)").all<{ name: string }>();
+  if (!staffColumns.results.some((column) => column.name === "whatsapp_phone")) {
+    await db.prepare("ALTER TABLE staff_members ADD COLUMN whatsapp_phone TEXT").run();
+  }
   schemaReady = true;
 }
 
@@ -102,11 +117,11 @@ export async function ensureCatalogSeed() {
     db.prepare("UPDATE staff_members SET status = 'available', status_date = NULL, updated_at = CURRENT_TIMESTAMP WHERE status = 'off_today' AND status_date IS NOT NULL AND status_date <> ?").bind(today),
     db.prepare("UPDATE service_entries SET status = 'available', status_date = NULL, updated_at = CURRENT_TIMESTAMP WHERE status = 'off_today' AND status_date IS NOT NULL AND status_date <> ?").bind(today),
     ...bookingStaff.map((member, index) =>
-      db.prepare("INSERT OR IGNORE INTO staff_members (id, name, role_ar, role_en, specialty, status, sort_order) VALUES (?, ?, ?, ?, ?, 'available', ?)")
+      db.prepare("INSERT INTO staff_members (id, name, role_ar, role_en, specialty, status, sort_order) VALUES (?, ?, ?, ?, ?, 'available', ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, role_ar = excluded.role_ar, role_en = excluded.role_en, specialty = excluded.specialty, sort_order = excluded.sort_order, updated_at = CURRENT_TIMESTAMP")
         .bind(member.id, member.name, member.role.ar, member.role.en, member.specialty, index),
     ),
     ...bookingServices.map((service, index) =>
-      db.prepare("INSERT OR IGNORE INTO service_entries (id, category_id, name_ar, name_en, duration_minutes, price_ar, price_en, specialty, status, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'available', ?)")
+      db.prepare("INSERT INTO service_entries (id, category_id, name_ar, name_en, duration_minutes, price_ar, price_en, specialty, status, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'available', ?) ON CONFLICT(id) DO UPDATE SET category_id = excluded.category_id, name_ar = excluded.name_ar, name_en = excluded.name_en, duration_minutes = excluded.duration_minutes, price_ar = excluded.price_ar, price_en = excluded.price_en, specialty = excluded.specialty, sort_order = excluded.sort_order, updated_at = CURRENT_TIMESTAMP")
         .bind(service.id, service.categoryId, service.name.ar, service.name.en, service.durationMinutes, service.price.ar, service.price.en, service.specialty, index),
     ),
   ];
@@ -116,15 +131,21 @@ export async function ensureCatalogSeed() {
 export async function getPublicCatalog() {
   await ensureCatalogSeed();
   const db = getD1();
-  const [staffResult, servicesResult] = await db.batch([
+  const now = ammanDateParts();
+  const [staffResult, servicesResult, breaksResult] = await db.batch([
     db.prepare("SELECT id, status, status_date FROM staff_members ORDER BY sort_order"),
     db.prepare("SELECT id, status, status_date FROM service_entries ORDER BY sort_order"),
+    db.prepare("SELECT staff_id, start_minute, end_minute FROM staff_breaks WHERE break_date = ? AND status = 'active' AND start_minute <= ? AND end_minute > ?").bind(now.date, now.minutes, now.minutes),
   ]);
   const staffStatus = new Map((staffResult.results as StatusRow[]).map((row) => [row.id, row]));
   const serviceStatus = new Map((servicesResult.results as StatusRow[]).map((row) => [row.id, row]));
   return {
     rules: BOOKING_RULES,
-    staff: bookingStaff.map((member) => ({ ...member, ...(staffStatus.get(member.id) ?? { status: "available", status_date: null }) })),
+    staff: bookingStaff.map((member) => ({
+      ...member,
+      ...(staffStatus.get(member.id) ?? { status: "available", status_date: null }),
+      breakNow: (breaksResult.results as BreakRow[]).some((entry) => entry.staff_id === member.id),
+    })),
     services: bookingServices.map((service) => ({ ...service, ...(serviceStatus.get(service.id) ?? { status: "available", status_date: null }) })),
   };
 }
@@ -154,15 +175,17 @@ async function scheduleContext(date: string, excludeBookingId?: string) {
   const busyQuery = excludeBookingId
     ? db.prepare("SELECT bi.staff_id, bi.start_minute, bi.end_minute FROM booking_items bi JOIN booking_groups bg ON bg.id = bi.booking_id WHERE bi.booking_date = ? AND bi.status = 'confirmed' AND bg.status = 'confirmed' AND bi.booking_id <> ?").bind(date, excludeBookingId)
     : db.prepare("SELECT bi.staff_id, bi.start_minute, bi.end_minute FROM booking_items bi JOIN booking_groups bg ON bg.id = bi.booking_id WHERE bi.booking_date = ? AND bi.status = 'confirmed' AND bg.status = 'confirmed'").bind(date);
-  const [staffResult, servicesResult, busyResult] = await db.batch([
+  const [staffResult, servicesResult, busyResult, breaksResult] = await db.batch([
     db.prepare("SELECT id, status, status_date FROM staff_members"),
     db.prepare("SELECT id, status, status_date FROM service_entries"),
     busyQuery,
+    db.prepare("SELECT staff_id, start_minute, end_minute FROM staff_breaks WHERE break_date = ? AND status = 'active'").bind(date),
   ]);
   return {
     staffStatus: new Map((staffResult.results as StatusRow[]).map((row) => [row.id, row])),
     serviceStatus: new Map((servicesResult.results as StatusRow[]).map((row) => [row.id, row])),
     busy: busyResult.results as BusyRow[],
+    breaks: breaksResult.results as BreakRow[],
   };
 }
 
@@ -171,7 +194,10 @@ type ScheduleContext = Awaited<ReturnType<typeof scheduleContext>>;
 function assignWithContext(date: string, groupStart: number, guests: GuestSelection[], context: ScheduleContext): AssignedGuest[] | null {
   const timelines = new Map<string, Array<{ start: number; end: number }>>();
   bookingStaff.forEach((member) => {
-    timelines.set(member.id, context.busy.filter((item) => item.staff_id === member.id).map((item) => ({ start: item.start_minute, end: item.end_minute })));
+    timelines.set(member.id, [
+      ...context.busy.filter((item) => item.staff_id === member.id).map((item) => ({ start: item.start_minute, end: item.end_minute })),
+      ...context.breaks.filter((item) => item.staff_id === member.id).map((item) => ({ start: item.start_minute, end: item.end_minute })),
+    ]);
   });
   const assigned: AssignedGuest[] = [];
 
@@ -229,12 +255,13 @@ export async function findAvailability(date: string, guests: GuestSelection[], e
     ? Math.ceil((now.minutes + BOOKING_RULES.leadMinutes) / BOOKING_RULES.slotMinutes) * BOOKING_RULES.slotMinutes
     : BOOKING_RULES.openingMinutes;
   const first = Math.max(BOOKING_RULES.openingMinutes, minimum);
+  const startInterval = guests.reduce((interval, guest) => Math.max(interval, getService(guest.serviceId)?.startIntervalMinutes ?? BOOKING_RULES.slotMinutes), BOOKING_RULES.slotMinutes);
   const slots: Array<{ startMinute: number; assignments: AssignedGuest[] }> = [];
   const context = await scheduleContext(date, excludeBookingId);
-  for (let start = first; start < BOOKING_RULES.closingMinutes; start += BOOKING_RULES.slotMinutes) {
+  for (let start = first; start <= BOOKING_RULES.latestStartMinutes; start += BOOKING_RULES.slotMinutes) {
+    if (start % startInterval !== 0) continue;
     const assignments = assignWithContext(date, start, guests, context);
     if (assignments) slots.push({ startMinute: start, assignments });
-    if (slots.length >= 24) break;
   }
   return slots;
 }
@@ -336,11 +363,20 @@ export async function createBooking(input: {
     throw error;
   }
   const summary = bookingSummaryText({ bookingCode, firstName, lastName, phone, date: input.date, assignments, locale: input.locale });
-  await sendBookingNotifications({ phone, ownerPhone: MUSTAFA_WHATSAPP, summary });
+  const staffIds = [...new Set(assignments.map((item) => item.staffId))];
+  const staffPlaceholders = staffIds.map(() => "?").join(",");
+  const staffPhones = staffIds.length
+    ? await db.prepare(`SELECT whatsapp_phone FROM staff_members WHERE id IN (${staffPlaceholders}) AND whatsapp_phone IS NOT NULL AND whatsapp_phone <> ''`).bind(...staffIds).all<{ whatsapp_phone: string }>()
+    : { results: [] as Array<{ whatsapp_phone: string }> };
+  await sendBookingNotifications({
+    phone,
+    ownerPhone: MUSTAFA_WHATSAPP,
+    staffPhones: staffPhones.results.map((row) => normalizePhone(row.whatsapp_phone)),
+    summary,
+  });
   return {
     bookingId: id,
     bookingCode,
-    manageToken,
     assignments,
     salonWhatsAppUrl: `https://wa.me/${SALON_WHATSAPP}?text=${encodeURIComponent(summary)}`,
   };
@@ -403,96 +439,22 @@ async function sendTemplate(phone: string, templateName: string | undefined, sum
   return response.ok;
 }
 
-async function sendBookingNotifications(input: { phone: string; ownerPhone: string; summary: string }) {
+async function sendBookingNotifications(input: { phone: string; ownerPhone: string; staffPhones: string[]; summary: string }) {
   const runtime = runtimeEnv();
+  const teamRecipients = [...new Set([input.ownerPhone, ...input.staffPhones].filter(Boolean))];
   await Promise.allSettled([
     sendTemplate(input.phone, runtime.WHATSAPP_CUSTOMER_TEMPLATE, input.summary),
-    sendTemplate(input.ownerPhone, runtime.WHATSAPP_OWNER_TEMPLATE, input.summary),
+    ...teamRecipients.map((recipient) => sendTemplate(recipient, runtime.WHATSAPP_STAFF_TEMPLATE ?? runtime.WHATSAPP_OWNER_TEMPLATE, input.summary)),
   ]);
-}
-
-export async function sendDecisionNotification(phone: string, summary: string) {
-  const runtime = runtimeEnv();
-  return sendTemplate(phone, runtime.WHATSAPP_CUSTOMER_TEMPLATE, summary);
-}
-
-export async function getBookingByManageToken(manageToken: string) {
-  await ensureBookingSchema();
-  const db = getD1();
-  return db.prepare("SELECT id, booking_code, first_name, last_name, phone, locale, status, manage_token, created_at FROM booking_groups WHERE manage_token = ?")
-    .bind(manageToken).first<{ id: string; booking_code: string; first_name: string; last_name: string; phone: string; locale: Locale; status: string; manage_token: string; created_at: string }>();
-}
-
-export async function createManageSession(challengeId: string, code: string) {
-  const challenge = await verifyOtp(challengeId, code, "manage");
-  if (!challenge.booking_id) throw new Error("BOOKING_NOT_FOUND");
-  const db = getD1();
-  const id = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
-  const expiresAt = Date.now() + 20 * 60_000;
-  await db.batch([
-    db.prepare("UPDATE otp_challenges SET verified_at = ? WHERE id = ? AND verified_at IS NULL").bind(Date.now(), challenge.id),
-    db.prepare("INSERT INTO manage_sessions (id, booking_id, expires_at) VALUES (?, ?, ?)").bind(id, challenge.booking_id, expiresAt),
-  ]);
-  return { token: id, expiresAt, bookingId: challenge.booking_id };
-}
-
-export async function requireManageSession(token: string) {
-  await ensureBookingSchema();
-  const db = getD1();
-  const session = await db.prepare("SELECT id, booking_id, expires_at FROM manage_sessions WHERE id = ?")
-    .bind(token).first<{ id: string; booking_id: string; expires_at: number }>();
-  if (!session || session.expires_at < Date.now()) throw new Error("MANAGE_SESSION_EXPIRED");
-  return session;
-}
-
-export async function bookingDetails(bookingId: string) {
-  const db = getD1();
-  const [booking, itemsResult, requestsResult] = await Promise.all([
-    db.prepare("SELECT id, booking_code, first_name, last_name, phone, locale, status, created_at FROM booking_groups WHERE id = ?").bind(bookingId).first(),
-    db.prepare("SELECT id, guest_index, guest_label, service_id, staff_id, booking_date, start_minute, end_minute, status FROM booking_items WHERE booking_id = ? ORDER BY guest_index").bind(bookingId).all(),
-    db.prepare("SELECT id, type, requested_date, requested_start_minute, status, created_at, decided_at, decision_note FROM change_requests WHERE booking_id = ? ORDER BY created_at DESC").bind(bookingId).all(),
-  ]);
-  return { booking, items: itemsResult.results, requests: requestsResult.results };
-}
-
-export async function createChangeRequest(input: { sessionToken: string; type: "cancel" | "reschedule"; date?: string; startMinute?: number }) {
-  const session = await requireManageSession(input.sessionToken);
-  const db = getD1();
-  const details = await bookingDetails(session.booking_id);
-  const booking = details.booking as { status?: string } | null;
-  if (!booking || booking.status !== "confirmed") throw new Error("BOOKING_NOT_ACTIVE");
-  const existingPending = await db.prepare("SELECT id FROM change_requests WHERE booking_id = ? AND status = 'pending' LIMIT 1").bind(session.booking_id).first();
-  if (existingPending) throw new Error("REQUEST_ALREADY_PENDING");
-  const firstItem = (details.items as Array<{ booking_date: string; start_minute: number }>)[0];
-  if (!firstItem) throw new Error("BOOKING_NOT_FOUND");
-  const appointment = new Date(`${firstItem.booking_date}T00:00:00+03:00`).getTime() + firstItem.start_minute * 60_000;
-  if (appointment - Date.now() < BOOKING_RULES.cancellationCutoffMinutes * 60_000) throw new Error("CHANGE_CUTOFF");
-  if (input.type === "reschedule") {
-    if (!input.date || !Number.isInteger(input.startMinute)) throw new Error("NEW_SLOT_REQUIRED");
-    const guests = (details.items as Array<{ service_id: string; staff_id: string; guest_label: string }>).map((item) => ({ serviceId: item.service_id, staffId: item.staff_id, label: item.guest_label }));
-    const allocation = await assignAtStart(input.date, input.startMinute!, guests, session.booking_id);
-    if (!allocation) throw new Error("SLOT_UNAVAILABLE");
-  }
-  const id = crypto.randomUUID();
-  await db.prepare("INSERT INTO change_requests (id, booking_id, type, requested_date, requested_start_minute, payload, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')")
-    .bind(id, session.booking_id, input.type, input.date ?? null, input.startMinute ?? null, JSON.stringify({}),).run();
-  const bookingInfo = details.booking as { booking_code?: string; first_name?: string; last_name?: string; phone?: string } | null;
-  const runtime = runtimeEnv();
-  await sendTemplate(
-    MUSTAFA_WHATSAPP,
-    runtime.WHATSAPP_OWNER_TEMPLATE,
-    `طلب ${input.type === "cancel" ? "إلغاء" : "تعديل"} لحجز ${bookingInfo?.booking_code ?? "MJ"}\n${bookingInfo?.first_name ?? ""} ${bookingInfo?.last_name ?? ""}\n+${bookingInfo?.phone ?? ""}`,
-  );
-  return { id, status: "pending" };
 }
 
 export function apiError(error: unknown) {
   const message = error instanceof Error ? error.message : "UNKNOWN_ERROR";
-  const status = ["INVALID_PHONE", "NAME_REQUIRED", "GUESTS_REQUIRED", "NEW_SLOT_REQUIRED"].includes(message) ? 400
-    : ["OTP_INVALID", "OTP_EXPIRED", "OTP_LOCKED", "OTP_ALREADY_USED", "MANAGE_SESSION_EXPIRED"].includes(message) ? 401
+  const status = ["INVALID_PHONE", "NAME_REQUIRED", "GUESTS_REQUIRED", "INVALID_USERNAME", "WEAK_PASSWORD", "USERNAME_TAKEN", "STAFF_NOT_FOUND"].includes(message) ? 400
+    : ["OTP_INVALID", "OTP_EXPIRED", "OTP_LOCKED", "OTP_ALREADY_USED"].includes(message) ? 401
       : message === "OTP_RATE_LIMITED" ? 429
       : message === "STAFF_UNAUTHORIZED" ? 403
-      : ["SLOT_UNAVAILABLE", "REQUEST_ALREADY_PENDING", "CHANGE_CUTOFF"].includes(message) ? 409
+      : ["SLOT_UNAVAILABLE"].includes(message) ? 409
         : message === "BOOKING_NOT_FOUND" ? 404 : 500;
   return Response.json({ error: message }, { status });
 }

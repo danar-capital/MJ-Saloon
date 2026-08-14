@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "@fontsource/bebas-neue/400.css";
 import "@fontsource/ibm-plex-sans-arabic/400.css";
 import "@fontsource/ibm-plex-sans-arabic/500.css";
@@ -16,7 +16,21 @@ export const metadata: Metadata = {
   icons: {
     icon: "/assets/mj-logo.jpeg",
     shortcut: "/assets/mj-logo.jpeg",
+    apple: "/assets/mj-logo.jpeg",
   },
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "MJ Control",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#07131c",
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

@@ -9,6 +9,7 @@ export const staffMembers = sqliteTable("staff_members", {
   specialty: text("specialty").notNull(),
   status: text("status").notNull().default("available"),
   statusDate: text("status_date"),
+  whatsappPhone: text("whatsapp_phone"),
   sortOrder: integer("sort_order").notNull().default(0),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
@@ -105,3 +106,42 @@ export const changeRequests = sqliteTable("change_requests", {
   index("change_requests_booking_idx").on(table.bookingId),
   index("change_requests_status_idx").on(table.status, table.createdAt),
 ]);
+
+export const staffBreaks = sqliteTable("staff_breaks", {
+  id: text("id").primaryKey(),
+  staffId: text("staff_id").notNull().references(() => staffMembers.id),
+  breakDate: text("break_date").notNull(),
+  startMinute: integer("start_minute").notNull(),
+  endMinute: integer("end_minute").notNull(),
+  note: text("note"),
+  status: text("status").notNull().default("active"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [index("staff_breaks_schedule_idx").on(table.staffId, table.breakDate, table.startMinute, table.endMinute)]);
+
+export const staffAccounts = sqliteTable("staff_accounts", {
+  id: text("id").primaryKey(),
+  staffId: text("staff_id").notNull().references(() => staffMembers.id),
+  username: text("username").notNull(),
+  passwordSalt: text("password_salt").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  role: text("role").notNull().default("staff"),
+  active: integer("active").notNull().default(1),
+  failedAttempts: integer("failed_attempts").notNull().default(0),
+  lockedUntil: integer("locked_until"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("staff_accounts_staff_unique").on(table.staffId),
+  uniqueIndex("staff_accounts_username_unique").on(table.username),
+]);
+
+export const staffSessions = sqliteTable("staff_sessions", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => staffAccounts.id),
+  tokenHash: text("token_hash").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  lastSeenAt: text("last_seen_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [uniqueIndex("staff_sessions_token_unique").on(table.tokenHash)]);

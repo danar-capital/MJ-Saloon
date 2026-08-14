@@ -467,7 +467,7 @@ canvas {
 .hero-logo-frame {
   position: relative;
   display: grid;
-  width: clamp(190px, 19vw, 285px);
+  width: clamp(165px, 16vw, 238px);
   place-items: center;
   isolation: isolate;
 }
@@ -965,14 +965,14 @@ canvas {
 }
 
 .service-name strong {
-  font-size: clamp(18px, 1.65vw, 24px);
+  font-size: clamp(21px, 1.85vw, 28px);
   font-weight: 500;
 }
 
 .service-name small {
   overflow: hidden;
   color: currentColor;
-  font-size: 10px;
+  font-size: 12px;
   opacity: 0.5;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1074,15 +1074,15 @@ canvas {
 
 .item-copy h4 {
   margin: 0;
-  font-size: 16px;
-  font-weight: 500;
+  font-size: clamp(18px, 1.45vw, 22px);
+  font-weight: 600;
 }
 
 .item-copy p {
   max-width: 440px;
   margin: 7px 0 0;
   color: rgba(255, 255, 255, 0.48);
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.7;
 }
 
@@ -1097,13 +1097,13 @@ canvas {
 .item-meta small {
   color: rgba(255, 255, 255, 0.44);
   font-family: "Manrope Variable", sans-serif;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .item-meta strong {
   color: white;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 17px;
+  font-weight: 600;
 }
 
 .team-section {
@@ -1776,7 +1776,7 @@ footer a {
   }
 
   .hero-logo-frame {
-    width: min(44vw, 182px);
+    width: min(37vw, 154px);
   }
 
   .hero-eyebrow {
@@ -2280,6 +2280,8 @@ body.booking-open {
 .booking-brand span { font-family: "Manrope Variable", sans-serif; font-size: 9px; font-weight: 700; letter-spacing: .13em; }
 .booking-brand small { color: rgba(255,255,255,.52); font-size: 9px; }
 .booking-close { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid rgba(255,255,255,.22); border-radius: 50%; background: rgba(255,255,255,.04); color: white; cursor: pointer; }
+.booking-header-actions { display: flex; align-items: center; gap: 8px; }
+.booking-step-back { display: inline-flex; min-height: 42px; align-items: center; gap: 7px; padding: 0 15px; border: 1px solid rgba(255,255,255,.2); border-radius: 999px; background: rgba(255,255,255,.045); color: white; cursor: pointer; font-size: 10px; }
 
 .booking-progress { display: grid; grid-template-columns: repeat(5, 1fr); padding: 0 clamp(18px, 4vw, 44px); border-bottom: 1px solid rgba(255,255,255,.1); }
 .booking-progress button { position: relative; display: flex; min-height: 62px; align-items: center; justify-content: center; gap: 8px; border: 0; background: transparent; color: rgba(255,255,255,.36); }
@@ -2317,8 +2319,9 @@ body.booking-open {
 .service-picks button.active { border-color: var(--red); background: linear-gradient(130deg, rgba(198,32,39,.26), rgba(198,32,39,.08)); }
 .service-picks button:disabled { opacity: .35; cursor: not-allowed; }
 .service-picks button span { display: flex; flex-direction: column; gap: 5px; }
-.service-picks button strong { font-size: 12px; font-weight: 500; }
-.service-picks button small, .service-picks button b { color: rgba(255,255,255,.45); font-size: 8px; font-weight: 400; }
+.service-picks button strong { font-size: 14px; font-weight: 600; }
+.service-picks button small { color: rgba(255,255,255,.52); font-size: 10px; font-weight: 400; }
+.service-picks button b { color: white; font-size: 12px; font-weight: 600; }
 .add-guest { display: inline-flex; min-height: 50px; align-items: center; justify-content: center; gap: 8px; border: 1px dashed rgba(255,255,255,.25); background: rgba(255,255,255,.02); color: white; cursor: pointer; }
 
 .staff-selection { display: grid; gap: 26px; }
@@ -2332,6 +2335,9 @@ body.booking-open {
 .staff-pick.active { background: rgba(198,32,39,.11); }
 .staff-pick.active::after { opacity: 1; transform: scale(1); }
 .staff-pick:disabled { opacity: .32; filter: grayscale(1); cursor: not-allowed; }
+.staff-pick.on-break:not(:disabled) { background: rgba(255,162,45,.075); }
+.staff-pick.on-break:not(:disabled) .staff-avatar { filter: grayscale(.82) brightness(.62); opacity: .62; }
+.staff-pick.on-break:not(:disabled)::before { position: absolute; z-index: 2; top: 9px; right: 9px; padding: 4px 8px; border-radius: 999px; content: "BREAK"; background: #e49a29; color: #07131c; font: 700 7px "Manrope Variable", sans-serif; letter-spacing: .08em; }
 .staff-avatar { display: grid; width: 76px; height: 93px; place-items: center; overflow: hidden; border-radius: 48% 48% 44% 44%; background: var(--gunmetal); }
 .staff-avatar img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
 .staff-avatar b { font-family: "Bebas Neue", sans-serif; font-size: 30px; }
@@ -2340,6 +2346,15 @@ body.booking-open {
 .staff-pick > small { max-width: 145px; color: rgba(255,255,255,.48); font-size: 7px; line-height: 1.55; }
 
 .time-selection { display: grid; gap: 24px; }
+.calendar-year-shell { overflow: hidden; border: 1px solid rgba(255,255,255,.15); background: rgba(3,11,16,.36); box-shadow: 0 28px 80px rgba(0,0,0,.18); }
+.calendar-year-heading { display: flex; min-height: 72px; align-items: center; gap: 13px; padding: 14px 18px; border-bottom: 1px solid rgba(255,255,255,.12); background: linear-gradient(90deg, rgba(198,32,39,.18), rgba(255,255,255,.025)); }
+.calendar-year-heading > div { display: flex; flex-direction: column; gap: 4px; }
+.calendar-year-heading strong { font-size: 14px; font-weight: 600; }
+.calendar-year-heading small { color: rgba(255,255,255,.45); font-size: 8px; }
+.calendar-year-scroll { display: grid; max-height: min(58vh,640px); gap: 12px; padding: 12px; overflow-y: auto; overscroll-behavior: contain; scroll-snap-type: y proximity; scrollbar-width: thin; scrollbar-color: var(--red) rgba(255,255,255,.04); -webkit-overflow-scrolling: touch; }
+.calendar-year-scroll .booking-calendar { scroll-snap-align: start; box-shadow: none; }
+.calendar-month-title { display: flex; min-height: 58px; align-items: center; justify-content: center; border-bottom: 1px solid rgba(255,255,255,.1); background: linear-gradient(90deg, rgba(198,32,39,.08), transparent, rgba(64,118,151,.06)); }
+.calendar-month-title strong { font-size: 18px; font-weight: 600; }
 .booking-calendar { overflow: hidden; border: 1px solid rgba(255,255,255,.14); background: linear-gradient(145deg, rgba(255,255,255,.055), rgba(2,9,13,.34)); box-shadow: 0 24px 65px rgba(0,0,0,.16); backdrop-filter: blur(14px); }
 .calendar-toolbar { display: grid; min-height: 76px; grid-template-columns: 48px 1fr 48px; align-items: center; padding: 8px 14px; border-bottom: 1px solid rgba(255,255,255,.1); background: linear-gradient(90deg, rgba(198,32,39,.08), transparent 35%, rgba(64,118,151,.06)); }
 .calendar-toolbar button { display: grid; width: 38px; height: 38px; place-items: center; border: 1px solid rgba(255,255,255,.16); border-radius: 50%; background: rgba(255,255,255,.035); color: white; cursor: pointer; transition: border-color 180ms ease, background 180ms ease, transform 180ms ease; }
@@ -2384,7 +2399,7 @@ body.booking-open {
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .form-grid label { display: flex; flex-direction: column; gap: 7px; }
-.form-grid label > span, .otp-stage label > span, .reschedule-panel label > span { color: rgba(255,255,255,.55); font-size: 9px; }
+.form-grid label > span, .otp-stage label > span { color: rgba(255,255,255,.55); font-size: 9px; }
 .form-grid .phone-field { grid-column: 1 / -1; }
 .secure-note { display: flex; align-items: flex-start; gap: 12px; margin-top: 20px; padding: 18px; border: 1px solid rgba(37,211,102,.18); background: rgba(37,211,102,.055); color: #d7f9e3; }
 .secure-note p { display: flex; flex-direction: column; gap: 6px; margin: 0; font-size: 11px; }
@@ -2462,9 +2477,6 @@ body.booking-open {
 .manage-action span { display: flex; flex-direction: column; gap: 4px; }
 .manage-action strong { font-size: 12px; }
 .manage-action small { color: rgba(255,255,255,.43); font-size: 8px; }
-.reschedule-panel { display: grid; gap: 10px; margin: 15px 0; padding: 16px; border: 1px solid rgba(255,255,255,.11); background: rgba(0,0,0,.14); }
-.reschedule-panel label { display: flex; flex-direction: column; gap: 7px; }
-.reschedule-panel input { height: 44px; padding: 0 12px; border: 1px solid rgba(255,255,255,.17); background: rgba(0,0,0,.18); color: white; color-scheme: dark; }
 .mini-slots { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; }
 .mini-slots button { height: 38px; border: 1px solid rgba(255,255,255,.13); background: transparent; color: white; cursor: pointer; font-size: 9px; }
 .mini-slots button.active { border-color: var(--red); background: var(--red); }
@@ -2559,6 +2571,93 @@ body.booking-open {
 .service-status-dot.disabled { background: #a0a8ad; box-shadow: none; }
 .service-status article { grid-template-columns: 42px minmax(0,1fr) auto; }
 
+/* MJ Control secure staff application */
+.staff-login-page, .staff-setup-page { position: relative; display: grid; min-height: 100svh; place-items: center; overflow: hidden; padding: 30px 16px; background: #07131c; color: white; }
+.staff-login-atmosphere { position: absolute; inset: 0; overflow: hidden; pointer-events: none; background: radial-gradient(circle at 78% 15%, rgba(198,32,39,.3), transparent 30%), radial-gradient(circle at 12% 84%, rgba(45,105,143,.22), transparent 34%), linear-gradient(145deg,#07131c,#03090d); }
+.staff-login-atmosphere::before { position: absolute; inset: 0; content: ""; opacity: .18; background-image: radial-gradient(rgba(255,255,255,.28) .7px, transparent .7px); background-size: 15px 15px; mask-image: linear-gradient(125deg,transparent,black 26%,black 70%,transparent); }
+.staff-login-atmosphere i { position: absolute; border: 1px solid rgba(255,255,255,.11); border-radius: 50%; transform: rotateX(64deg) rotateZ(-12deg); animation: control-orbit 16s ease-in-out infinite alternate; }
+.staff-login-atmosphere i:nth-child(1) { top: -20vw; right: -12vw; width: 65vw; height: 65vw; border-color: rgba(198,32,39,.28); }
+.staff-login-atmosphere i:nth-child(2) { bottom: -26vw; left: -13vw; width: 58vw; height: 58vw; animation-delay: -4s; }
+.staff-login-atmosphere i:nth-child(3) { top: 29%; left: 20%; width: 33vw; height: 33vw; border-style: dashed; opacity: .4; animation-duration: 21s; }
+.staff-login-home { position: absolute; z-index: 2; top: 22px; right: 24px; display: flex; align-items: center; gap: 10px; color: rgba(255,255,255,.65); font-size: 9px; }
+.staff-login-home img { width: 46px; height: 46px; padding: 2px; border-radius: 50%; background: white; object-fit: contain; }
+.staff-login-card, .staff-setup-card { position: relative; z-index: 1; width: min(100%,520px); padding: clamp(28px,5vw,56px); border: 1px solid rgba(255,255,255,.17); background: linear-gradient(145deg,rgba(16,35,51,.92),rgba(4,12,17,.96)); box-shadow: 0 45px 130px rgba(0,0,0,.42); backdrop-filter: blur(22px); }
+.staff-login-mark { display: flex; align-items: center; gap: 13px; margin-bottom: 38px; }
+.staff-login-mark img { width: 58px; height: 58px; padding: 3px; border-radius: 50%; background: white; object-fit: contain; }
+.staff-login-mark span { display: flex; flex-direction: column; gap: 5px; }
+.staff-login-mark b { font: 700 10px "Manrope Variable",sans-serif; letter-spacing: .16em; }
+.staff-login-mark small { color: rgba(255,255,255,.4); font: 600 7px "Manrope Variable",sans-serif; letter-spacing: .14em; }
+.staff-login-kicker { margin: 0 0 10px; color: var(--red); font: 700 8px "Manrope Variable",sans-serif; letter-spacing: .17em; }
+.staff-login-card h1 { margin: 0; font-size: clamp(46px,8vw,76px); font-weight: 500; line-height: .98; letter-spacing: -.055em; }
+.staff-login-copy { max-width: 410px; margin: 18px 0 30px; color: rgba(255,255,255,.55); font-size: 11px; line-height: 1.9; }
+.staff-login-card form, .staff-setup-card form { display: grid; gap: 13px; }
+.staff-login-card label, .staff-setup-card label, .account-card label, .break-form label { display: flex; flex-direction: column; gap: 7px; }
+.staff-login-card label > span, .staff-setup-card label > span, .account-card label > span, .break-form label > span { color: rgba(255,255,255,.52); font-size: 8px; }
+.staff-login-card input, .staff-setup-card input { width: 100%; height: 52px; padding: 0 14px; border: 1px solid rgba(255,255,255,.17); outline: 0; background: rgba(1,7,10,.48); color: white; }
+.staff-login-card input:focus, .staff-setup-card input:focus { border-color: var(--red); box-shadow: 0 0 0 3px rgba(198,32,39,.11); }
+.password-control { display: grid; grid-template-columns: 1fr 48px; border: 1px solid rgba(255,255,255,.17); background: rgba(1,7,10,.48); }
+.password-control input { border: 0 !important; background: transparent !important; box-shadow: none !important; }
+.password-control button { display: grid; place-items: center; border: 0; background: transparent; color: rgba(255,255,255,.55); cursor: pointer; }
+.staff-login-submit { display: inline-flex; width: 100%; min-height: 53px; align-items: center; justify-content: center; gap: 9px; margin-top: 5px; border: 0; background: var(--red); color: white; box-shadow: 0 18px 50px rgba(198,32,39,.28); cursor: pointer; font-size: 11px; font-weight: 600; }
+.staff-login-submit:disabled { opacity: .5; }
+.staff-login-error { padding: 11px 13px; border: 1px solid rgba(255,95,95,.28); background: rgba(198,32,39,.13); color: #ffc7c9; font-size: 9px; line-height: 1.6; }
+.staff-login-security, .staff-first-setup, .staff-install-login { display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: 17px; color: rgba(255,255,255,.42); font-size: 8px; }
+.staff-first-setup { margin-top: 12px; color: rgba(255,255,255,.65); }
+.staff-install-login { width: 100%; min-height: 42px; border: 1px solid rgba(255,255,255,.16); background: transparent; color: white; cursor: pointer; }
+.staff-login-loading { display: flex; flex-direction: column; align-items: center; gap: 13px; color: rgba(255,255,255,.55); }
+.staff-setup-card > img { width: 74px; height: 74px; margin-bottom: 22px; padding: 3px; border-radius: 50%; background: white; }
+.staff-setup-card > p { color: rgba(255,255,255,.55); }
+.staff-setup-card h1 { margin: 8px 0 12px; font-size: clamp(38px,6vw,58px); font-weight: 500; }
+.staff-setup-done { display: flex; flex-direction: column; align-items: center; gap: 13px; text-align: center; }
+.staff-setup-done > span { display: grid; width: 68px; height: 68px; place-items: center; border-radius: 50%; background: var(--red); }
+.staff-setup-done a { padding: 13px 20px; background: var(--red); font-size: 10px; }
+.staff-install { display: flex; min-height: 39px; align-items: center; justify-content: center; gap: 7px; margin-top: 10px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.045); color: white; cursor: pointer; font-size: 8px; }
+.staff-signout { border: 0; background: transparent; cursor: pointer; }
+.staff-alert { display: flex; align-items: center; gap: 8px; margin: -18px 0 18px; padding: 12px 14px; border: 1px solid; font-size: 9px; }
+.staff-alert.error { border-color: rgba(198,32,39,.28); background: rgba(198,32,39,.08); color: #9c1c22; }
+.staff-alert.success { border-color: rgba(35,172,99,.25); background: rgba(35,172,99,.08); color: #147f48; }
+.agenda-whatsapp, .break-remove-inline { display: inline-flex; min-height: 38px; align-items: center; justify-content: center; gap: 6px; padding: 0 11px; border: 0; border-radius: 2px; cursor: pointer; font-size: 8px; }
+.agenda-whatsapp { background: #25d366; color: white; }
+.break-remove-inline { background: rgba(198,32,39,.09); color: var(--red); }
+.break-agenda { background: linear-gradient(90deg,#fff7e9,white); }
+.break-agenda .agenda-line { background: #e49a29; }
+.break-agenda .agenda-avatar { background: #e49a29; }
+.status-control-layout { display: grid; grid-template-columns: .9fr 1.1fr; gap: 16px; align-items: start; }
+.availability-panel, .break-panel, .accounts-panel { border: 1px solid #d7dbde; background: white; }
+.break-form { display: grid; gap: 13px; padding: 20px; }
+.break-form label > span, .account-card label > span { color: #7f8a91; }
+.break-form select, .break-form input, .account-card input { width: 100%; height: 43px; padding: 0 11px; border: 1px solid #d8dcdf; outline: 0; background: #f8f9f9; color: #07131c; font: 9px "IBM Plex Sans Arabic",sans-serif; }
+.break-form select:focus, .break-form input:focus, .account-card input:focus { border-color: var(--red); box-shadow: 0 0 0 3px rgba(198,32,39,.07); }
+.break-time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.break-date { display: flex; min-height: 50px; flex-direction: column; justify-content: center; gap: 4px; padding: 0 12px; border: 1px solid #dde0e2; background: #f8f9f9; }
+.break-date strong { font-size: 10px; }
+.break-date small { color: #89939a; font: 8px "Manrope Variable",sans-serif; }
+.break-form > button, .account-card > button { display: inline-flex; min-height: 45px; align-items: center; justify-content: center; gap: 7px; border: 0; background: var(--red); color: white; cursor: pointer; font-size: 9px; }
+.break-list { padding: 0 20px 20px; }
+.break-list h3 { margin: 5px 0 11px; font-size: 12px; }
+.break-list article { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px; border: 1px solid #e0e3e5; background: #fbfbfb; }
+.break-list article + article { margin-top: 6px; }
+.break-list article > span { display: grid; grid-template-columns: 21px 1fr; align-items: center; gap: 3px 7px; }
+.break-list b { font: 600 9px "Manrope Variable",sans-serif; }
+.break-list small { grid-column: 2; color: #8b949a; font-size: 7px; }
+.break-list button { display: grid; width: 34px; height: 34px; place-items: center; border: 0; background: rgba(198,32,39,.08); color: var(--red); cursor: pointer; }
+.service-management { max-width: 980px; }
+.accounts-panel { overflow: hidden; }
+.accounts-intro { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 28px; border-bottom: 1px solid #e0e3e5; background: linear-gradient(120deg,#07131c,#102333); color: white; }
+.accounts-intro p { margin: 0 0 8px; color: var(--red); font: 700 8px "Manrope Variable",sans-serif; letter-spacing: .14em; }
+.accounts-intro h2 { margin: 0; font-size: 30px; font-weight: 500; }
+.accounts-intro span { display: block; max-width: 570px; margin-top: 9px; color: rgba(255,255,255,.5); font-size: 9px; line-height: 1.7; }
+.account-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; padding: 14px; }
+.account-card { display: grid; gap: 11px; padding: 18px; border: 1px solid #dde0e2; background: #fafafa; }
+.account-head { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 10px; margin-bottom: 5px; }
+.account-head h3 { margin: 0 0 4px; font: 500 16px "Manrope Variable",sans-serif; }
+.account-head span { font-size: 7px; }
+.account-head span.ready { color: #17824c; }
+.account-head span.pending { color: #b57617; }
+.staff-mobile-install-hint { display: none; }
+
+@keyframes control-orbit { to { transform: rotateX(72deg) rotateZ(30deg) translate3d(20px,-24px,0); } }
+
 @keyframes booking-enter { from { opacity: 0; transform: translateX(45px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes booking-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes booking-sweep { 0%,12% { transform: translateX(0) skewX(-16deg); opacity: 0; } 38%,66% { opacity: .8; } 86%,100% { transform: translateX(470%) skewX(-16deg); opacity: 0; } }
@@ -2588,6 +2687,8 @@ body.booking-open {
   .dashboard-search { grid-column: 1 / -1; }
   .agenda-item { grid-template-columns: 70px 2px minmax(210px,1fr) auto; }
   .agenda-contact { display: none; }
+  .status-control-layout { grid-template-columns: 1fr; }
+  .account-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {
@@ -2599,6 +2700,7 @@ body.booking-open {
   .booking-brand span { font-size: 7px; }
   .booking-brand small { font-size: 7px; }
   .booking-close { width: 37px; height: 37px; }
+  .booking-step-back { min-height: 37px; padding: 0 11px; }
   .booking-progress { padding: 0 8px; }
   .booking-progress button { min-height: 54px; flex-direction: column; gap: 3px; }
   .booking-progress button > span { width: 20px; height: 20px; }
@@ -2620,6 +2722,11 @@ body.booking-open {
   .calendar-toolbar button { width: 34px; height: 34px; }
   .calendar-toolbar strong { font-size: 15px; }
   .calendar-toolbar small { font-size: 7px; }
+  .calendar-year-scroll { max-height: 56svh; padding: 7px; gap: 8px; }
+  .calendar-year-heading { min-height: 64px; padding: 11px 13px; }
+  .calendar-year-heading strong { font-size: 12px; }
+  .calendar-month-title { min-height: 50px; }
+  .calendar-month-title strong { font-size: 15px; }
   .calendar-weekdays { padding: 10px 6px 5px; }
   .calendar-days { gap: 3px; padding: 4px 6px 9px; }
   .calendar-days button, .calendar-blank { min-height: 42px; }
@@ -2652,6 +2759,7 @@ body.booking-open {
   .dashboard-search { grid-column: auto; }
   .agenda-item { grid-template-columns: 62px 2px minmax(0,1fr); gap: 10px; padding: 12px 9px; }
   .agenda-item > .status-pill { display: none; }
+  .agenda-whatsapp, .break-remove-inline { width: 100%; grid-column: 1 / -1; }
   .agenda-main { grid-template-columns: 42px minmax(0,1fr); gap: 8px; }
   .agenda-avatar { width: 40px; height: 40px; }
   .agenda-main h2 { font-size: 13px; }
@@ -2661,4 +2769,13 @@ body.booking-open {
   .request-actions button { flex: 1; justify-content: center; }
   .status-list article { grid-template-columns: 36px minmax(0,1fr); }
   .status-list select { grid-column: 1 / -1; width: 100%; }
+  .staff-login-home span { display: none; }
+  .staff-login-card, .staff-setup-card { padding: 28px 20px; }
+  .staff-login-mark { margin-bottom: 28px; }
+  .staff-login-card h1 { font-size: 50px; }
+  .accounts-intro { padding: 22px 18px; }
+  .accounts-intro h2 { font-size: 25px; }
+  .account-grid { padding: 8px; }
+  .break-time-grid { grid-template-columns: 1fr; }
+  .staff-mobile-install-hint { position: fixed; z-index: 12; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.18); border-radius: 999px; background: rgba(7,19,28,.82); color: white; font-size: 6px; backdrop-filter: blur(10px); pointer-events: none; }
 }

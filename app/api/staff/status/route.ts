@@ -1,14 +1,17 @@
 import { ammanDateParts, apiError, ensureCatalogSeed, getD1 } from "@/lib/booking-server";
-import { assertOwner } from "@/lib/staff-auth";
+import { requireStaffSession } from "@/lib/staff-auth";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
-    await assertOwner();
+    const viewer = await requireStaffSession(request);
     const payload = await request.json() as { target?: "staff" | "service"; id?: string; status?: "available" | "off_today" | "disabled" };
     if (!payload.id || !["staff", "service"].includes(payload.target ?? "") || !["available", "off_today", "disabled"].includes(payload.status ?? "")) {
       return Response.json({ error: "INVALID_STATUS_UPDATE" }, { status: 400 });
+    }
+    if (!viewer.isOwner && (payload.target !== "staff" || payload.id !== viewer.staffId)) {
+      return Response.json({ error: "STAFF_UNAUTHORIZED" }, { status: 403 });
     }
     await ensureCatalogSeed();
     const db = getD1();

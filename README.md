@@ -23,6 +23,8 @@ The runtime supports these environment variables:
 - `WHATSAPP_OWNER_TEMPLATE`
 - `WHATSAPP_STAFF_TEMPLATE` (falls back to the owner template)
 
+`WHATSAPP_DEMO_OTP=true` is available only for controlled testing. Leave it unset in production: the booking API then refuses confirmation unless WhatsApp accepted the real OTP message, and it never exposes a fallback code to the customer.
+
 Mustafa can save each employee's WhatsApp number while creating their account. Booking notifications are then sent to the assigned employee as well as the salon/owner.
 
 ## Stack

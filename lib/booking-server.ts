@@ -393,6 +393,13 @@ export async function createOtp(phoneValue: string, purpose: "booking" | "manage
   await db.prepare("INSERT INTO otp_challenges (id, phone, purpose, booking_id, code_hash, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
     .bind(id, phone, purpose, bookingId ?? null, codeHash, expiresAt).run();
   const delivery = await sendAuthenticationTemplate(phone, code);
+  if (!delivery.delivered) {
+    const demoEnabled = runtimeEnv().WHATSAPP_DEMO_OTP === "true";
+    if (!demoEnabled) {
+      await db.prepare("DELETE FROM otp_challenges WHERE id = ?").bind(id).run();
+      throw new Error(delivery.configured ? "WHATSAPP_DELIVERY_FAILED" : "WHATSAPP_NOT_CONFIGURED");
+    }
+  }
   return { id, expiresAt, delivered: delivery.delivered, devCode: delivery.delivered ? undefined : code };
 }
 
@@ -497,22 +504,26 @@ async function sendAuthenticationTemplate(phone: string, code: string) {
   const token = runtime.WHATSAPP_ACCESS_TOKEN;
   const phoneNumberId = runtime.WHATSAPP_PHONE_NUMBER_ID;
   const template = runtime.WHATSAPP_AUTH_TEMPLATE;
-  if (!token || !phoneNumberId || !template) return { delivered: false };
-  const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to: phone,
-      type: "template",
-      template: {
-        name: template,
-        language: { code: "ar" },
-        components: [{ type: "body", parameters: [{ type: "text", text: code }] }, { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: code }] }],
-      },
-    }),
-  });
-  return { delivered: response.ok };
+  if (!token || !phoneNumberId || !template) return { configured: false, delivered: false };
+  try {
+    const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: phone,
+        type: "template",
+        template: {
+          name: template,
+          language: { code: "ar" },
+          components: [{ type: "body", parameters: [{ type: "text", text: code }] }, { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: code }] }],
+        },
+      }),
+    });
+    return { configured: true, delivered: response.ok };
+  } catch {
+    return { configured: true, delivered: false };
+  }
 }
 
 async function sendTemplate(phone: string, templateName: string | undefined, summary: string) {
@@ -547,6 +558,7 @@ export function apiError(error: unknown) {
   const status = ["INVALID_PHONE", "NAME_REQUIRED", "GUESTS_REQUIRED", "INVALID_USERNAME", "WEAK_PASSWORD", "USERNAME_TAKEN", "STAFF_NOT_FOUND"].includes(message) ? 400
     : ["OTP_INVALID", "OTP_EXPIRED", "OTP_LOCKED", "OTP_ALREADY_USED"].includes(message) ? 401
       : message === "OTP_RATE_LIMITED" ? 429
+        : ["WHATSAPP_NOT_CONFIGURED", "WHATSAPP_DELIVERY_FAILED"].includes(message) ? 503
       : message === "STAFF_UNAUTHORIZED" ? 403
       : ["SLOT_UNAVAILABLE"].includes(message) ? 409
         : message === "BOOKING_NOT_FOUND" ? 404 : 500;

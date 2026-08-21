@@ -26,11 +26,17 @@ export type BookingStaff = {
   founder?: boolean;
 };
 
+export type StaffOperationalDefault = {
+  startMinute: number;
+  endMinute: number;
+  whatsappPhone?: string;
+};
+
 export const BOOKING_RULES = {
   timezone: "Asia/Amman",
-  openingMinutes: 11 * 60,
-  closingMinutes: 22 * 60,
-  latestStartMinutes: 21 * 60 + 30,
+  openingMinutes: 12 * 60,
+  closingMinutes: 23 * 60,
+  latestStartMinutes: 22 * 60 + 30,
   slotMinutes: 30,
   leadMinutes: 30,
   bookingHorizonDays: 365,
@@ -80,6 +86,18 @@ export const bookingStaff: BookingStaff[] = [
   { id: "aows", name: "AOWS", role: { ar: "مصفف شعر", en: "Hair Stylist" }, specialty: "hair" },
   { id: "skin-specialist", name: "مختص العناية بالبشرة", role: { ar: "أخصائي عناية بالبشرة", en: "Skin Care Specialist" }, specialty: "skin" },
 ];
+
+export const staffOperationalDefaults: Record<string, StaffOperationalDefault> = {
+  bahaa: { startMinute: 12 * 60, endMinute: 21 * 60, whatsappPhone: "962798826453" },
+  m7m7: { startMinute: 12 * 60, endMinute: 21 * 60, whatsappPhone: "962791918334" },
+  mustafa: { startMinute: 12 * 60, endMinute: 23 * 60, whatsappPhone: "962796152602" },
+  amro: { startMinute: 12 * 60, endMinute: 23 * 60, whatsappPhone: "962796174628" },
+  osaid: { startMinute: 12 * 60, endMinute: 23 * 60, whatsappPhone: "962797886326" },
+  ali: { startMinute: 12 * 60, endMinute: 23 * 60 },
+  aows: { startMinute: 12 * 60, endMinute: 23 * 60 },
+  mera: { startMinute: 12 * 60, endMinute: 23 * 60 },
+  "skin-specialist": { startMinute: 12 * 60, endMinute: 23 * 60 },
+};
 
 export function minutesToTime(minutes: number, locale: Locale = "ar") {
   const normalized = ((minutes % (24 * 60)) + 24 * 60) % (24 * 60);

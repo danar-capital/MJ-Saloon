@@ -5,6 +5,7 @@ import {
   bookingStaff,
   getService,
   getStaff,
+  staffOperationalDefaults,
   type Locale,
 } from "./booking-config";
 
@@ -25,8 +26,10 @@ export type AssignedGuest = {
 
 type StatusRow = {
   id: string;
-  status: "available" | "off_today" | "disabled";
+  status: "available" | "break" | "off_today" | "disabled";
   status_date: string | null;
+  status_started_at?: string | null;
+  weekly_off_day?: number | null;
 };
 
 type BusyRow = {
@@ -41,9 +44,19 @@ type BreakRow = {
   end_minute: number;
 };
 
+type ScheduleRow = {
+  staff_id: string;
+  weekday: number;
+  start_minute: number;
+  end_minute: number;
+  active: number;
+};
+
 const SALON_WHATSAPP = "962797799677";
 const MUSTAFA_WHATSAPP = "962796152602";
+const STAFF_OPERATIONS_MIGRATION = "staff-operations-2026-08-21-v1";
 let schemaReady = false;
+let seededDate: string | null = null;
 
 export function getD1() {
   if (!env.DB) throw new Error("BOOKING_DB_UNAVAILABLE");
@@ -58,23 +71,44 @@ export async function ensureBookingSchema() {
   if (schemaReady) return;
   const db = getD1();
   await db.batch([
-    db.prepare("CREATE TABLE IF NOT EXISTS staff_members (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, role_ar TEXT NOT NULL, role_en TEXT NOT NULL, specialty TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'available', status_date TEXT, sort_order INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS staff_members (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, role_ar TEXT NOT NULL, role_en TEXT NOT NULL, specialty TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'available', status_date TEXT, status_started_at TEXT, weekly_off_day INTEGER, sort_order INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
     db.prepare("CREATE TABLE IF NOT EXISTS service_entries (id TEXT PRIMARY KEY NOT NULL, category_id TEXT NOT NULL, name_ar TEXT NOT NULL, name_en TEXT NOT NULL, duration_minutes INTEGER NOT NULL, price_ar TEXT NOT NULL, price_en TEXT NOT NULL, specialty TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'available', status_date TEXT, sort_order INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
     db.prepare("CREATE TABLE IF NOT EXISTS booking_groups (id TEXT PRIMARY KEY NOT NULL, booking_code TEXT NOT NULL UNIQUE, first_name TEXT NOT NULL, last_name TEXT NOT NULL, phone TEXT NOT NULL, locale TEXT NOT NULL DEFAULT 'ar', status TEXT NOT NULL DEFAULT 'confirmed', manage_token TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS booking_items (id TEXT PRIMARY KEY NOT NULL, booking_id TEXT NOT NULL, guest_index INTEGER NOT NULL, guest_label TEXT NOT NULL, service_id TEXT NOT NULL, staff_id TEXT NOT NULL, booking_date TEXT NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'confirmed', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (booking_id) REFERENCES booking_groups(id))"),
+    db.prepare("CREATE TABLE IF NOT EXISTS booking_items (id TEXT PRIMARY KEY NOT NULL, booking_id TEXT NOT NULL, guest_index INTEGER NOT NULL, guest_label TEXT NOT NULL, service_id TEXT NOT NULL, staff_id TEXT NOT NULL, booking_date TEXT NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'confirmed', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (booking_id) REFERENCES booking_groups(id))"),
     db.prepare("CREATE TABLE IF NOT EXISTS schedule_locks (slot_key TEXT PRIMARY KEY NOT NULL, booking_id TEXT NOT NULL, staff_id TEXT NOT NULL, booking_date TEXT NOT NULL, minute INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (booking_id) REFERENCES booking_groups(id))"),
     db.prepare("CREATE TABLE IF NOT EXISTS otp_challenges (id TEXT PRIMARY KEY NOT NULL, phone TEXT NOT NULL, purpose TEXT NOT NULL, booking_id TEXT, code_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, verified_at INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
     db.prepare("CREATE TABLE IF NOT EXISTS manage_sessions (id TEXT PRIMARY KEY NOT NULL, booking_id TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (booking_id) REFERENCES booking_groups(id))"),
     db.prepare("CREATE TABLE IF NOT EXISTS change_requests (id TEXT PRIMARY KEY NOT NULL, booking_id TEXT NOT NULL, type TEXT NOT NULL, requested_date TEXT, requested_start_minute INTEGER, payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'pending', decision_note TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, decided_at TEXT, FOREIGN KEY (booking_id) REFERENCES booking_groups(id))"),
     db.prepare("CREATE TABLE IF NOT EXISTS staff_breaks (id TEXT PRIMARY KEY NOT NULL, staff_id TEXT NOT NULL, break_date TEXT NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, note TEXT, status TEXT NOT NULL DEFAULT 'active', created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (staff_id) REFERENCES staff_members(id))"),
     db.prepare("CREATE INDEX IF NOT EXISTS staff_breaks_schedule_idx ON staff_breaks (staff_id, break_date, start_minute, end_minute)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS staff_schedules (id TEXT PRIMARY KEY NOT NULL, staff_id TEXT NOT NULL, weekday INTEGER NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (staff_id) REFERENCES staff_members(id))"),
+    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS staff_schedules_staff_day_unique ON staff_schedules (staff_id, weekday)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS staff_schedules_day_idx ON staff_schedules (weekday, staff_id)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS system_events (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, actor_id TEXT, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS system_events_created_idx ON system_events (created_at)"),
     db.prepare("CREATE TABLE IF NOT EXISTS staff_accounts (id TEXT PRIMARY KEY NOT NULL, staff_id TEXT NOT NULL UNIQUE, username TEXT NOT NULL UNIQUE, password_salt TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'staff', active INTEGER NOT NULL DEFAULT 1, failed_attempts INTEGER NOT NULL DEFAULT 0, locked_until INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (staff_id) REFERENCES staff_members(id))"),
     db.prepare("CREATE TABLE IF NOT EXISTS staff_sessions (id TEXT PRIMARY KEY NOT NULL, account_id TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, expires_at INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (account_id) REFERENCES staff_accounts(id))"),
     db.prepare("CREATE INDEX IF NOT EXISTS staff_sessions_token_idx ON staff_sessions (token_hash, expires_at)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS staff_passkeys (id TEXT PRIMARY KEY NOT NULL, account_id TEXT NOT NULL, credential_id TEXT NOT NULL UNIQUE, public_key TEXT NOT NULL, counter INTEGER NOT NULL DEFAULT 0, transports TEXT NOT NULL DEFAULT '[]', device_type TEXT NOT NULL DEFAULT 'singleDevice', backed_up INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_used_at TEXT, FOREIGN KEY (account_id) REFERENCES staff_accounts(id))"),
+    db.prepare("CREATE INDEX IF NOT EXISTS staff_passkeys_account_idx ON staff_passkeys (account_id, created_at)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS staff_passkey_challenges (id TEXT PRIMARY KEY NOT NULL, account_id TEXT NOT NULL, challenge TEXT NOT NULL, purpose TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (account_id) REFERENCES staff_accounts(id))"),
+    db.prepare("CREATE INDEX IF NOT EXISTS staff_passkey_challenges_lookup_idx ON staff_passkey_challenges (account_id, purpose, expires_at)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS app_migrations (id TEXT PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
   ]);
   const staffColumns = await db.prepare("PRAGMA table_info(staff_members)").all<{ name: string }>();
   if (!staffColumns.results.some((column) => column.name === "whatsapp_phone")) {
     await db.prepare("ALTER TABLE staff_members ADD COLUMN whatsapp_phone TEXT").run();
+  }
+  if (!staffColumns.results.some((column) => column.name === "status_started_at")) {
+    await db.prepare("ALTER TABLE staff_members ADD COLUMN status_started_at TEXT").run();
+  }
+  if (!staffColumns.results.some((column) => column.name === "weekly_off_day")) {
+    await db.prepare("ALTER TABLE staff_members ADD COLUMN weekly_off_day INTEGER").run();
+  }
+  const bookingItemColumns = await db.prepare("PRAGMA table_info(booking_items)").all<{ name: string }>();
+  if (!bookingItemColumns.results.some((column) => column.name === "updated_at")) {
+    await db.prepare("ALTER TABLE booking_items ADD COLUMN updated_at TEXT").run();
+    await db.prepare("UPDATE booking_items SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)").run();
   }
   schemaReady = true;
 }
@@ -113,8 +147,9 @@ export async function ensureCatalogSeed() {
   await ensureBookingSchema();
   const db = getD1();
   const today = ammanDateParts().date;
+  if (seededDate === today) return;
   const statements = [
-    db.prepare("UPDATE staff_members SET status = 'available', status_date = NULL, updated_at = CURRENT_TIMESTAMP WHERE status = 'off_today' AND status_date IS NOT NULL AND status_date <> ?").bind(today),
+    db.prepare("UPDATE staff_members SET status = 'available', status_date = NULL, status_started_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE status IN ('off_today', 'break') AND status_date IS NOT NULL AND status_date <> ?").bind(today),
     db.prepare("UPDATE service_entries SET status = 'available', status_date = NULL, updated_at = CURRENT_TIMESTAMP WHERE status = 'off_today' AND status_date IS NOT NULL AND status_date <> ?").bind(today),
     ...bookingStaff.map((member, index) =>
       db.prepare("INSERT INTO staff_members (id, name, role_ar, role_en, specialty, status, sort_order) VALUES (?, ?, ?, ?, ?, 'available', ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, role_ar = excluded.role_ar, role_en = excluded.role_en, specialty = excluded.specialty, sort_order = excluded.sort_order, updated_at = CURRENT_TIMESTAMP")
@@ -124,18 +159,62 @@ export async function ensureCatalogSeed() {
       db.prepare("INSERT INTO service_entries (id, category_id, name_ar, name_en, duration_minutes, price_ar, price_en, specialty, status, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'available', ?) ON CONFLICT(id) DO UPDATE SET category_id = excluded.category_id, name_ar = excluded.name_ar, name_en = excluded.name_en, duration_minutes = excluded.duration_minutes, price_ar = excluded.price_ar, price_en = excluded.price_en, specialty = excluded.specialty, sort_order = excluded.sort_order, updated_at = CURRENT_TIMESTAMP")
         .bind(service.id, service.categoryId, service.name.ar, service.name.en, service.durationMinutes, service.price.ar, service.price.en, service.specialty, index),
     ),
+    db.prepare("INSERT INTO staff_members (id, name, role_ar, role_en, specialty, status, sort_order) VALUES ('reception', 'موظف الاستقبال', 'موظف الاستقبال', 'Reception', 'operations', 'available', 900) ON CONFLICT(id) DO UPDATE SET name = excluded.name, role_ar = excluded.role_ar, role_en = excluded.role_en, specialty = excluded.specialty, sort_order = excluded.sort_order, updated_at = CURRENT_TIMESTAMP"),
+    ...bookingStaff.flatMap((member) => {
+      const defaults = staffOperationalDefaults[member.id] ?? {
+        startMinute: BOOKING_RULES.openingMinutes,
+        endMinute: BOOKING_RULES.closingMinutes,
+      };
+      return Array.from({ length: 7 }, (_, weekday) =>
+        db.prepare("INSERT INTO staff_schedules (id, staff_id, weekday, start_minute, end_minute, active) VALUES (?, ?, ?, ?, ?, 1) ON CONFLICT(staff_id, weekday) DO NOTHING")
+          .bind(`${member.id}-${weekday}`, member.id, weekday, defaults.startMinute, defaults.endMinute),
+      );
+    }),
   ];
   await db.batch(statements);
+
+  const operationsApplied = await db.prepare("SELECT id FROM app_migrations WHERE id = ?")
+    .bind(STAFF_OPERATIONS_MIGRATION).first<{ id: string }>();
+  if (!operationsApplied) {
+    const operationStatements = bookingStaff.flatMap((member) => {
+      const defaults = staffOperationalDefaults[member.id];
+      if (!defaults) return [];
+      const scheduleStatements = Array.from({ length: 7 }, (_, weekday) =>
+        db.prepare(`
+          INSERT INTO staff_schedules (id, staff_id, weekday, start_minute, end_minute, active)
+          VALUES (?, ?, ?, ?, ?, 1)
+          ON CONFLICT(staff_id, weekday) DO UPDATE SET
+            start_minute = excluded.start_minute,
+            end_minute = excluded.end_minute,
+            active = 1,
+            updated_at = CURRENT_TIMESTAMP
+        `).bind(`${member.id}-${weekday}`, member.id, weekday, defaults.startMinute, defaults.endMinute),
+      );
+      if (defaults.whatsappPhone) {
+        scheduleStatements.push(
+          db.prepare("UPDATE staff_members SET whatsapp_phone = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .bind(defaults.whatsappPhone, member.id),
+        );
+      }
+      return scheduleStatements;
+    });
+    operationStatements.push(
+      db.prepare("INSERT OR IGNORE INTO app_migrations (id) VALUES (?)").bind(STAFF_OPERATIONS_MIGRATION),
+      db.prepare("INSERT INTO system_events (type, payload) VALUES ('staff.operations_seeded', ?)")
+        .bind(JSON.stringify({ migration: STAFF_OPERATIONS_MIGRATION })),
+    );
+    await db.batch(operationStatements);
+  }
+  seededDate = today;
 }
 
 export async function getPublicCatalog() {
   await ensureCatalogSeed();
   const db = getD1();
   const now = ammanDateParts();
-  const [staffResult, servicesResult, breaksResult] = await db.batch([
-    db.prepare("SELECT id, status, status_date FROM staff_members ORDER BY sort_order"),
+  const [staffResult, servicesResult] = await db.batch([
+    db.prepare("SELECT id, status, status_date, status_started_at, weekly_off_day FROM staff_members WHERE specialty <> 'operations' ORDER BY sort_order"),
     db.prepare("SELECT id, status, status_date FROM service_entries ORDER BY sort_order"),
-    db.prepare("SELECT staff_id, start_minute, end_minute FROM staff_breaks WHERE break_date = ? AND status = 'active' AND start_minute <= ? AND end_minute > ?").bind(now.date, now.minutes, now.minutes),
   ]);
   const staffStatus = new Map((staffResult.results as StatusRow[]).map((row) => [row.id, row]));
   const serviceStatus = new Map((servicesResult.results as StatusRow[]).map((row) => [row.id, row]));
@@ -144,7 +223,7 @@ export async function getPublicCatalog() {
     staff: bookingStaff.map((member) => ({
       ...member,
       ...(staffStatus.get(member.id) ?? { status: "available", status_date: null }),
-      breakNow: (breaksResult.results as BreakRow[]).some((entry) => entry.staff_id === member.id),
+      breakNow: staffStatus.get(member.id)?.status === "break" && staffStatus.get(member.id)?.status_date === now.date,
     })),
     services: bookingServices.map((service) => ({ ...service, ...(serviceStatus.get(service.id) ?? { status: "available", status_date: null }) })),
   };
@@ -154,6 +233,10 @@ function statusAllowsDate(row: StatusRow | undefined, date: string) {
   if (!row || row.status === "available") return true;
   if (row.status === "disabled") return false;
   return row.status_date !== date;
+}
+
+export function weekdayFromDate(date: string) {
+  return new Date(`${date}T12:00:00+03:00`).getUTCDay();
 }
 
 function intervalsOverlap(startA: number, endA: number, startB: number, endB: number) {
@@ -173,19 +256,24 @@ async function scheduleContext(date: string, excludeBookingId?: string) {
   await ensureCatalogSeed();
   const db = getD1();
   const busyQuery = excludeBookingId
-    ? db.prepare("SELECT bi.staff_id, bi.start_minute, bi.end_minute FROM booking_items bi JOIN booking_groups bg ON bg.id = bi.booking_id WHERE bi.booking_date = ? AND bi.status = 'confirmed' AND bg.status = 'confirmed' AND bi.booking_id <> ?").bind(date, excludeBookingId)
-    : db.prepare("SELECT bi.staff_id, bi.start_minute, bi.end_minute FROM booking_items bi JOIN booking_groups bg ON bg.id = bi.booking_id WHERE bi.booking_date = ? AND bi.status = 'confirmed' AND bg.status = 'confirmed'").bind(date);
-  const [staffResult, servicesResult, busyResult, breaksResult] = await db.batch([
-    db.prepare("SELECT id, status, status_date FROM staff_members"),
+    ? db.prepare("SELECT bi.staff_id, bi.start_minute, bi.end_minute FROM booking_items bi JOIN booking_groups bg ON bg.id = bi.booking_id WHERE bi.booking_date = ? AND bi.status IN ('confirmed','arrived','in_service') AND bg.status NOT IN ('cancelled','no_show') AND bi.booking_id <> ?").bind(date, excludeBookingId)
+    : db.prepare("SELECT bi.staff_id, bi.start_minute, bi.end_minute FROM booking_items bi JOIN booking_groups bg ON bg.id = bi.booking_id WHERE bi.booking_date = ? AND bi.status IN ('confirmed','arrived','in_service') AND bg.status NOT IN ('cancelled','no_show')").bind(date);
+  const weekday = weekdayFromDate(date);
+  const [staffResult, servicesResult, busyResult, breaksResult, schedulesResult] = await db.batch([
+    db.prepare("SELECT id, status, status_date, status_started_at, weekly_off_day FROM staff_members"),
     db.prepare("SELECT id, status, status_date FROM service_entries"),
     busyQuery,
     db.prepare("SELECT staff_id, start_minute, end_minute FROM staff_breaks WHERE break_date = ? AND status = 'active'").bind(date),
+    db.prepare("SELECT staff_id, weekday, start_minute, end_minute, active FROM staff_schedules WHERE weekday = ?").bind(weekday),
   ]);
+  const scheduleMap = new Map((schedulesResult.results as ScheduleRow[]).map((row) => [row.staff_id, row]));
   return {
+    weekday,
     staffStatus: new Map((staffResult.results as StatusRow[]).map((row) => [row.id, row])),
     serviceStatus: new Map((servicesResult.results as StatusRow[]).map((row) => [row.id, row])),
     busy: busyResult.results as BusyRow[],
     breaks: breaksResult.results as BreakRow[],
+    staffSchedule: scheduleMap,
   };
 }
 
@@ -218,7 +306,12 @@ function assignWithContext(date: string, groupStart: number, guests: GuestSelect
         ? Math.max(...earlierForStaff.map((item) => item.endMinute + BOOKING_RULES.internalBufferMinutes))
         : groupStart;
       const desiredEnd = desiredStart + service.durationMinutes;
-      if (desiredStart < BOOKING_RULES.openingMinutes || desiredEnd > BOOKING_RULES.closingMinutes) return [];
+      const status = context.staffStatus.get(member.id);
+      if (status?.weekly_off_day === context.weekday) return [];
+      const schedule = context.staffSchedule.get(member.id);
+      const shiftStart = schedule?.active === 0 ? Number.POSITIVE_INFINITY : schedule?.start_minute ?? BOOKING_RULES.openingMinutes;
+      const shiftEnd = schedule?.active === 0 ? Number.NEGATIVE_INFINITY : schedule?.end_minute ?? BOOKING_RULES.closingMinutes;
+      if (desiredStart < shiftStart || desiredEnd > shiftEnd) return [];
       const blocked = (timelines.get(member.id) ?? []).some((interval) =>
         intervalsOverlap(desiredStart, desiredEnd + BOOKING_RULES.internalBufferMinutes, interval.start, interval.end + BOOKING_RULES.internalBufferMinutes),
       );
@@ -300,6 +393,13 @@ export async function createOtp(phoneValue: string, purpose: "booking" | "manage
   await db.prepare("INSERT INTO otp_challenges (id, phone, purpose, booking_id, code_hash, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
     .bind(id, phone, purpose, bookingId ?? null, codeHash, expiresAt).run();
   const delivery = await sendAuthenticationTemplate(phone, code);
+  if (!delivery.delivered) {
+    const demoEnabled = runtimeEnv().WHATSAPP_DEMO_OTP === "true";
+    if (!demoEnabled) {
+      await db.prepare("DELETE FROM otp_challenges WHERE id = ?").bind(id).run();
+      throw new Error(delivery.configured ? "WHATSAPP_DELIVERY_FAILED" : "WHATSAPP_NOT_CONFIGURED");
+    }
+  }
   return { id, expiresAt, delivered: delivery.delivered, devCode: delivery.delivered ? undefined : code };
 }
 
@@ -350,10 +450,11 @@ export async function createBooking(input: {
     db.prepare("INSERT INTO booking_groups (id, booking_code, first_name, last_name, phone, locale, status, manage_token) VALUES (?, ?, ?, ?, ?, ?, 'confirmed', ?)")
       .bind(id, bookingCode, firstName, lastName, phone, input.locale, manageToken),
     ...assignments.map((item) =>
-      db.prepare("INSERT INTO booking_items (id, booking_id, guest_index, guest_label, service_id, staff_id, booking_date, start_minute, end_minute, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')")
+      db.prepare("INSERT INTO booking_items (id, booking_id, guest_index, guest_label, service_id, staff_id, booking_date, start_minute, end_minute, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', CURRENT_TIMESTAMP)")
         .bind(crypto.randomUUID(), id, item.guestIndex, item.label, item.serviceId, item.staffId, input.date, item.startMinute, item.endMinute),
     ),
     ...scheduleLockStatements(db, id, input.date, assignments),
+    db.prepare("INSERT INTO system_events (type, payload) VALUES ('booking.created', ?)").bind(JSON.stringify({ bookingId: id, staffIds: assignments.map((item) => item.staffId), date: input.date })),
   ];
   try {
     await db.batch(statements);
@@ -403,22 +504,26 @@ async function sendAuthenticationTemplate(phone: string, code: string) {
   const token = runtime.WHATSAPP_ACCESS_TOKEN;
   const phoneNumberId = runtime.WHATSAPP_PHONE_NUMBER_ID;
   const template = runtime.WHATSAPP_AUTH_TEMPLATE;
-  if (!token || !phoneNumberId || !template) return { delivered: false };
-  const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to: phone,
-      type: "template",
-      template: {
-        name: template,
-        language: { code: "ar" },
-        components: [{ type: "body", parameters: [{ type: "text", text: code }] }, { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: code }] }],
-      },
-    }),
-  });
-  return { delivered: response.ok };
+  if (!token || !phoneNumberId || !template) return { configured: false, delivered: false };
+  try {
+    const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: phone,
+        type: "template",
+        template: {
+          name: template,
+          language: { code: "ar" },
+          components: [{ type: "body", parameters: [{ type: "text", text: code }] }, { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: code }] }],
+        },
+      }),
+    });
+    return { configured: true, delivered: response.ok };
+  } catch {
+    return { configured: true, delivered: false };
+  }
 }
 
 async function sendTemplate(phone: string, templateName: string | undefined, summary: string) {
@@ -453,6 +558,7 @@ export function apiError(error: unknown) {
   const status = ["INVALID_PHONE", "NAME_REQUIRED", "GUESTS_REQUIRED", "INVALID_USERNAME", "WEAK_PASSWORD", "USERNAME_TAKEN", "STAFF_NOT_FOUND"].includes(message) ? 400
     : ["OTP_INVALID", "OTP_EXPIRED", "OTP_LOCKED", "OTP_ALREADY_USED"].includes(message) ? 401
       : message === "OTP_RATE_LIMITED" ? 429
+        : ["WHATSAPP_NOT_CONFIGURED", "WHATSAPP_DELIVERY_FAILED"].includes(message) ? 503
       : message === "STAFF_UNAUTHORIZED" ? 403
       : ["SLOT_UNAVAILABLE"].includes(message) ? 409
         : message === "BOOKING_NOT_FOUND" ? 404 : 500;

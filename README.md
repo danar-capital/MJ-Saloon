@@ -10,7 +10,7 @@ High-end bilingual MJ Hair Salon website, online booking system, WhatsApp verifi
 
 The owner account can see every schedule, manage services and team availability, add staff breaks, and create/reset employee accounts. Employee accounts can only see their own customers and phone numbers, update their own availability, and block break periods. Passwords are PBKDF2-hashed; sessions use secure HTTP-only cookies.
 
-Booking starts at 12:00 PM. The latest visible start is 11:00 PM, and the selected service must still fit before midnight. General starts use a 30-minute grid; packages marked as hourly use a 60-minute grid. The calendar is a rolling 365-day view.
+Booking starts at 12:00 PM. BAHAA and M7M7 finish at 9:00 PM; the remaining specialists finish at 11:00 PM. A service is offered only when it can finish inside the selected employee's shift. General starts use a 30-minute grid; designated packages retain a 60-minute start grid without displaying an hourly-booking label. The calendar is a rolling 365-day view.
 
 ## WhatsApp configuration
 
@@ -22,6 +22,8 @@ The runtime supports these environment variables:
 - `WHATSAPP_CUSTOMER_TEMPLATE`
 - `WHATSAPP_OWNER_TEMPLATE`
 - `WHATSAPP_STAFF_TEMPLATE` (falls back to the owner template)
+
+`WHATSAPP_DEMO_OTP=true` is available only for controlled testing. Leave it unset in production: the booking API then refuses confirmation unless WhatsApp accepted the real OTP message, and it never exposes a fallback code to the customer.
 
 Mustafa can save each employee's WhatsApp number while creating their account. Booking notifications are then sent to the assigned employee as well as the salon/owner.
 

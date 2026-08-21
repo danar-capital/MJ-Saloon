@@ -86,10 +86,9 @@ const copy = {
     loading: "لحظة واحدة…",
     error: "تعذر إكمال الطلب. راجع البيانات وحاول مرة أخرى.",
     slotGone: "هذا الوقت حُجز للتو. اختر وقتًا آخر من القائمة.",
-    policy: "الحجز مفتوح حتى 30 دقيقة قبل الموعد · الدوام يوميًا من 11:00 صباحًا إلى 10:00 مساءً · لا يوجد دفع إلكتروني.",
-    daily: "يوميًا · 11:00 صباحًا — 10:00 مساءً",
+    policy: "الحجز مفتوح حتى 30 دقيقة قبل الموعد · تبدأ المواعيد يوميًا من 12:00 ظهرًا · لا يوجد دفع إلكتروني.",
+    daily: "المواعيد يوميًا · 12:00 ظهرًا — 11:00 مساءً",
     duration: "دقيقة",
-    hourly: "حجز على رأس كل ساعة",
     selectAll: "أكمل اختيارات جميع الأشخاص للمتابعة.",
   },
   en: {
@@ -140,10 +139,9 @@ const copy = {
     loading: "One moment…",
     error: "We couldn’t complete the request. Check the details and try again.",
     slotGone: "That time was just booked. Please choose another slot.",
-    policy: "Book up to 30 minutes before · open daily from 11:00 AM to 10:00 PM · no online payment.",
-    daily: "Daily · 11:00 AM — 10:00 PM",
+    policy: "Book up to 30 minutes before · appointments start daily at 12:00 PM · no online payment.",
+    daily: "Appointments daily · 12:00 PM — 11:00 PM",
     duration: "min",
-    hourly: "Starts on the hour",
     selectAll: "Complete every guest’s selection to continue.",
   },
 } as const;
@@ -519,7 +517,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
                             const disabled = service.status === "disabled" || (service.status === "off_today" && (!service.status_date || service.status_date === date));
                             return (
                               <button type="button" key={service.id} disabled={disabled} className={guest.serviceId === service.id ? "active" : ""} onClick={() => updateGuest(index, { serviceId: service.id })}>
-                                <span><strong>{service.name[lang]}</strong><small>{service.showDuration === false ? t.hourly : `${service.durationMinutes} ${t.duration}`}</small>{service.details && <em>{service.details[lang]}</em>}</span><b>{disabled ? (service.status === "off_today" ? t.off : t.unavailable) : service.price[lang]}</b>
+                                <span><strong>{service.name[lang]}</strong>{service.showDuration !== false && <small>{service.durationMinutes} {t.duration}</small>}{service.details && <em>{service.details[lang]}</em>}</span><b>{disabled ? (service.status === "off_today" ? t.off : t.unavailable) : service.price[lang]}</b>
                               </button>
                             );
                           })}

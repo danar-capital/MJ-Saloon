@@ -9,6 +9,8 @@ export const staffMembers = sqliteTable("staff_members", {
   specialty: text("specialty").notNull(),
   status: text("status").notNull().default("available"),
   statusDate: text("status_date"),
+  statusStartedAt: text("status_started_at"),
+  weeklyOffDay: integer("weekly_off_day"),
   whatsappPhone: text("whatsapp_phone"),
   sortOrder: integer("sort_order").notNull().default(0),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -58,6 +60,7 @@ export const bookingItems = sqliteTable("booking_items", {
   endMinute: integer("end_minute").notNull(),
   status: text("status").notNull().default("confirmed"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [
   index("booking_items_schedule_idx").on(table.staffId, table.bookingDate, table.startMinute, table.endMinute),
   index("booking_items_booking_idx").on(table.bookingId),
@@ -120,6 +123,27 @@ export const staffBreaks = sqliteTable("staff_breaks", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [index("staff_breaks_schedule_idx").on(table.staffId, table.breakDate, table.startMinute, table.endMinute)]);
 
+export const staffSchedules = sqliteTable("staff_schedules", {
+  id: text("id").primaryKey(),
+  staffId: text("staff_id").notNull().references(() => staffMembers.id),
+  weekday: integer("weekday").notNull(),
+  startMinute: integer("start_minute").notNull(),
+  endMinute: integer("end_minute").notNull(),
+  active: integer("active").notNull().default(1),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("staff_schedules_staff_day_unique").on(table.staffId, table.weekday),
+  index("staff_schedules_day_idx").on(table.weekday, table.staffId),
+]);
+
+export const systemEvents = sqliteTable("system_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  type: text("type").notNull(),
+  actorId: text("actor_id"),
+  payload: text("payload").notNull().default("{}"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [index("system_events_created_idx").on(table.createdAt)]);
+
 export const staffAccounts = sqliteTable("staff_accounts", {
   id: text("id").primaryKey(),
   staffId: text("staff_id").notNull().references(() => staffMembers.id),
@@ -145,3 +169,35 @@ export const staffSessions = sqliteTable("staff_sessions", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   lastSeenAt: text("last_seen_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [uniqueIndex("staff_sessions_token_unique").on(table.tokenHash)]);
+
+export const staffPasskeys = sqliteTable("staff_passkeys", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => staffAccounts.id),
+  credentialId: text("credential_id").notNull(),
+  publicKey: text("public_key").notNull(),
+  counter: integer("counter").notNull().default(0),
+  transports: text("transports").notNull().default("[]"),
+  deviceType: text("device_type").notNull().default("singleDevice"),
+  backedUp: integer("backed_up").notNull().default(0),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  lastUsedAt: text("last_used_at"),
+}, (table) => [
+  uniqueIndex("staff_passkeys_credential_unique").on(table.credentialId),
+  index("staff_passkeys_account_idx").on(table.accountId, table.createdAt),
+]);
+
+export const staffPasskeyChallenges = sqliteTable("staff_passkey_challenges", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => staffAccounts.id),
+  challenge: text("challenge").notNull(),
+  purpose: text("purpose").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("staff_passkey_challenges_lookup_idx").on(table.accountId, table.purpose, table.expiresAt),
+]);
+
+export const appMigrations = sqliteTable("app_migrations", {
+  id: text("id").primaryKey(),
+  appliedAt: text("applied_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});

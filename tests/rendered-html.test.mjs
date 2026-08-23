@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
+import { stat } from "node:fs/promises";
 import test from "node:test";
 
-const developmentPreviewMeta =
-  /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
-
-test("renders development preview metadata", async () => {
+test("renders production metadata and a deferred hero video", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
@@ -29,5 +27,20 @@ test("renders development preview metadata", async () => {
     response.headers.get("content-type") ?? "",
     /^text\/html\b/i,
   );
-  assert.match(await response.text(), developmentPreviewMeta);
+  const html = await response.text();
+  assert.doesNotMatch(html, /name=["']codex-preview["']/i);
+  const heroVideo = html.match(/<video(?=[^>]*\bclass=["'][^"']*\bhero-video\b[^"']*["'])[^>]*>/i)?.[0] ?? "";
+  assert.match(heroVideo, /\bpreload=["']metadata["']/i);
+  assert.doesNotMatch(heroVideo, /\bsrc=/i);
+});
+
+test("keeps startup hero videos within the delivery budget", async () => {
+  for (const relativePath of [
+    "../public/assets/mj-salon-hero-1080.mp4",
+    "../public/assets/mj-salon-hero-mobile-1080.mp4",
+  ]) {
+    const details = await stat(new URL(relativePath, import.meta.url));
+    assert.ok(details.size > 0);
+    assert.ok(details.size < 5_000_000, `${relativePath} exceeds the 5 MB startup budget`);
+  }
 });

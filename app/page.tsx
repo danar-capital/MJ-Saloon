@@ -85,9 +85,9 @@ const services: ServiceGroup[] = [
     items: [
       { name: { ar: "بكج MJ", en: "MJ Package" }, duration: { ar: "45 دقيقة", en: "45 min" }, price: { ar: "25 د.أ", en: "25 JOD" }, note: { ar: "حلاقة شعر ولحية + إكسبريس فيشل", en: "Haircut and beard + express facial" } },
       { name: { ar: "MJ 2", en: "MJ 2" }, duration: { ar: "60 دقيقة", en: "60 min" }, price: { ar: "35 د.أ", en: "35 JOD" }, note: { ar: "بدكير يد وقدم + شعر ولحية + سشوار", en: "Hand and foot care + haircut and beard + blow dry" } },
-      { name: { ar: "MJ SUPER", en: "MJ SUPER" }, duration: { ar: "حجز كل ساعة", en: "Hourly booking" }, price: { ar: "80 د.أ", en: "80 JOD" }, note: { ar: "شعر + لحية + سشوار + بدكير يد وقدم + هيدرافيشل", en: "Hair + beard + blow dry + hand and foot care + hydrafacial" } },
-      { name: { ar: "بكج الإكسبريس", en: "Express Package" }, duration: { ar: "حجز كل ساعة", en: "Hourly booking" }, price: { ar: "50 د.أ", en: "50 JOD" }, note: { ar: "بدكير يد وقدم + شعر ولحية + سشوار + إكسبريس فيشل", en: "Hand and foot care + haircut and beard + blow dry + express facial" } },
-      { name: { ar: "بكج العريس", en: "Groom Package" }, duration: { ar: "حجز كل ساعة", en: "Hourly booking" }, price: { ar: "100 د.أ", en: "100 JOD" }, note: { ar: "30 دقيقة مساج + بدكير يد وأقدام + شعر ولحية + أدفانس سوبر للبشرة", en: "30-minute massage + hand and foot care + haircut and beard + Advanced Super facial" } },
+      { name: { ar: "MJ SUPER", en: "MJ SUPER" }, duration: { ar: "", en: "" }, price: { ar: "80 د.أ", en: "80 JOD" }, note: { ar: "شعر + لحية + سشوار + بدكير يد وقدم + هيدرافيشل", en: "Hair + beard + blow dry + hand and foot care + hydrafacial" } },
+      { name: { ar: "بكج الإكسبريس", en: "Express Package" }, duration: { ar: "", en: "" }, price: { ar: "50 د.أ", en: "50 JOD" }, note: { ar: "بدكير يد وقدم + شعر ولحية + سشوار + إكسبريس فيشل", en: "Hand and foot care + haircut and beard + blow dry + express facial" } },
+      { name: { ar: "بكج العريس", en: "Groom Package" }, duration: { ar: "", en: "" }, price: { ar: "100 د.أ", en: "100 JOD" }, note: { ar: "30 دقيقة مساج + بدكير يد وأقدام + شعر ولحية + أدفانس سوبر للبشرة", en: "30-minute massage + hand and foot care + haircut and beard + Advanced Super facial" } },
     ],
   },
 ];
@@ -132,7 +132,7 @@ const ui = {
     visitKicker: "تعال كما أنت",
     visitTitle: "ونحن نهتم بالباقي.",
     openDaily: "نفتح يوميًا",
-    hours: "11:00 صباحًا — 10:00 مساءً",
+    hours: "12:00 ظهرًا — 11:00 مساءً",
     location: "افتح الموقع على الخريطة",
     whatsapp: "واتساب",
     instagram: "إنستغرام",
@@ -169,7 +169,7 @@ const ui = {
     visitKicker: "Come as you are",
     visitTitle: "We’ll take care of the rest.",
     openDaily: "Open daily",
-    hours: "11:00 AM — 10:00 PM",
+    hours: "12:00 PM — 11:00 PM",
     location: "Open location in Maps",
     whatsapp: "WhatsApp",
     instagram: "Instagram",
@@ -189,8 +189,14 @@ function LuxuryBackground() {
 
     let cleanup: (() => void) | undefined;
     let cancelled = false;
-    void import("three").then((THREE) => {
-      if (cancelled) return;
+    let setupObserver: IntersectionObserver | null = null;
+    let started = false;
+    const initialize = () => {
+      if (started || cancelled) return;
+      started = true;
+      setupObserver?.disconnect();
+      void import("three").then((THREE) => {
+        if (cancelled) return;
 
     const mobile = window.innerWidth < 720;
     let renderer: WebGLRenderer;
@@ -396,10 +402,22 @@ function LuxuryBackground() {
       renderer.dispose();
       renderer.domElement.remove();
     };
-    });
+      });
+    };
+
+    const firstAmbientSection = document.querySelector(".dark-3d");
+    if (firstAmbientSection) {
+      setupObserver = new IntersectionObserver(([entry]) => {
+        if (entry?.isIntersecting) initialize();
+      }, { rootMargin: "100% 0px" });
+      setupObserver.observe(firstAmbientSection);
+    } else {
+      initialize();
+    }
 
     return () => {
       cancelled = true;
+      setupObserver?.disconnect();
       cleanup?.();
     };
   }, []);
@@ -416,8 +434,14 @@ function ScissorScene() {
 
     let cleanup: (() => void) | undefined;
     let cancelled = false;
-    void import("three").then((THREE) => {
-      if (cancelled) return;
+    let setupObserver: IntersectionObserver | null = null;
+    let started = false;
+    const initialize = () => {
+      if (started || cancelled) return;
+      started = true;
+      setupObserver?.disconnect();
+      void import("three").then((THREE) => {
+        if (cancelled) return;
 
     let renderer: WebGLRenderer;
     try {
@@ -743,10 +767,22 @@ function ScissorScene() {
       renderer.dispose();
       renderer.domElement.remove();
     };
-    });
+      });
+    };
+
+    const cutSection = document.getElementById("cut");
+    if (cutSection) {
+      setupObserver = new IntersectionObserver(([entry]) => {
+        if (entry?.isIntersecting) initialize();
+      }, { rootMargin: "0px 0px -25% 0px" });
+      setupObserver.observe(cutSection);
+    } else {
+      initialize();
+    }
 
     return () => {
       cancelled = true;
+      setupObserver?.disconnect();
       cleanup?.();
     };
   }, []);
@@ -1020,7 +1056,7 @@ export default function Home() {
 
       <section className="hero" id="home">
         <div className="hero-media" aria-hidden="true">
-          <video ref={heroVideoRef} className="hero-video" src="/assets/mj-salon-hero-1080.mp4" autoPlay muted loop playsInline preload="auto" poster="/assets/mj-salon-hero-poster.jpg" disablePictureInPicture />
+          <video ref={heroVideoRef} className="hero-video" autoPlay muted loop playsInline preload="metadata" poster="/assets/mj-salon-hero-poster.jpg" disablePictureInPicture />
         </div>
         <div className="hero-video-shade" />
         <div className="portal portal-a" />
@@ -1095,7 +1131,7 @@ export default function Home() {
               {services[activeService].items.map((item, index) => (
                 <article key={`${item.name.en}-${index}`} className="detail-item">
                   <div className="item-copy"><h4>{item.name[lang]}</h4>{item.note && <p>{item.note[lang]}</p>}</div>
-                  <div className="item-meta"><small>{item.duration[lang]}</small><strong>{item.price[lang]}</strong><button type="button" className="item-book" onClick={() => launchBooking(bookingServices.find((service) => service.name.en === item.name.en)?.id)}>{t.bookingItem}<Arrow size={13} /></button></div>
+                  <div className="item-meta">{item.duration[lang] && <small>{item.duration[lang]}</small>}<strong>{item.price[lang]}</strong><button type="button" className="item-book" onClick={() => launchBooking(bookingServices.find((service) => service.name.en === item.name.en)?.id)}>{t.bookingItem}<Arrow size={13} /></button></div>
                 </article>
               ))}
             </div>

@@ -1,5 +1,5 @@
 import { apiError, ensureCatalogSeed, getD1 } from "@/lib/booking-server";
-import { requireStaffSession, saveStaffAccount } from "@/lib/staff-auth";
+import { assertSameOrigin, requireStaffSession, saveStaffAccount } from "@/lib/staff-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -7,7 +7,7 @@ export async function GET(request: Request) {
   try {
     await requireStaffSession(request, true);
     await ensureCatalogSeed();
-    const result = await getD1().prepare("SELECT sm.id AS staff_id, sm.name, sm.whatsapp_phone, sa.username, sa.role, sa.active, sa.updated_at FROM staff_members sm LEFT JOIN staff_accounts sa ON sa.staff_id = sm.id ORDER BY sm.sort_order").all();
+    const result = await getD1().prepare("SELECT sm.id AS staff_id, COALESCE(NULLIF(sm.profile_name, ''), sm.name) AS name, sm.whatsapp_phone, sm.profile_image_updated_at, sa.username, sa.role, sa.active, sa.updated_at FROM staff_members sm LEFT JOIN staff_accounts sa ON sa.staff_id = sm.id ORDER BY sm.sort_order").all();
     return Response.json({ accounts: result.results }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return apiError(error);
@@ -16,6 +16,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    assertSameOrigin(request);
     await requireStaffSession(request, true);
     const payload = await request.json() as { staffId?: string; username?: string; password?: string; whatsappPhone?: string; role?: "owner" | "staff" };
     if (!payload.staffId || !payload.username || !payload.password) return Response.json({ error: "ACCOUNT_FIELDS_REQUIRED" }, { status: 400 });

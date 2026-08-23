@@ -22,6 +22,27 @@
       "when": 1786713913924,
       "tag": "0002_tricky_silver_sable",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1787488162555,
+      "tag": "0003_elite_stryfe",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1787494772278,
+      "tag": "0004_short_shiver_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1787494848258,
+      "tag": "0005_majestic_spectrum",
+      "breakpoints": true
     }
   ]
 }

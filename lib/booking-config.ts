@@ -15,6 +15,11 @@ export type BookingService = {
   price: LocalizedText;
   details?: LocalizedText;
   specialty: "hair" | "nails" | "skin";
+  resources?: Array<{
+    specialty: "hair" | "nails" | "skin";
+    durationMinutes: number;
+    label: LocalizedText;
+  }>;
 };
 
 export type BookingStaff = {
@@ -26,11 +31,17 @@ export type BookingStaff = {
   founder?: boolean;
 };
 
+export type StaffOperationalDefault = {
+  startMinute: number;
+  endMinute: number;
+  whatsappPhone?: string;
+};
+
 export const BOOKING_RULES = {
   timezone: "Asia/Amman",
-  openingMinutes: 11 * 60,
-  closingMinutes: 22 * 60,
-  latestStartMinutes: 21 * 60 + 30,
+  openingMinutes: 12 * 60,
+  closingMinutes: 23 * 60,
+  latestStartMinutes: 22 * 60 + 30,
   slotMinutes: 30,
   leadMinutes: 30,
   bookingHorizonDays: 365,
@@ -62,11 +73,29 @@ export const bookingServices: BookingService[] = [
   { id: "package-advance", categoryId: "skin", name: { ar: "ادفانس", en: "Advance" }, durationMinutes: 45, price: { ar: "50 د.أ", en: "50 JOD" }, details: { ar: "هيدرافيشل، قناع، سنفرة، مقشرات، مرطبات وبخار.", en: "Hydrafacial, mask, scrub, exfoliation, moisturisers and steam." }, specialty: "skin" },
   { id: "package-express", categoryId: "skin", name: { ar: "اكسبريس", en: "Express" }, durationMinutes: 25, price: { ar: "20 د.أ", en: "20 JOD" }, details: { ar: "قناع وبخار.", en: "Mask and steam." }, specialty: "skin" },
   { id: "package-advance-2", categoryId: "skin", name: { ar: "ادفانس 2", en: "Advance 2" }, durationMinutes: 35, price: { ar: "35 د.أ", en: "35 JOD" }, details: { ar: "قناع، سنفرة، مقشرات، مرطبات، كريمات وبخار.", en: "Mask, scrub, exfoliation, moisturisers, creams and steam." }, specialty: "skin" },
-  { id: "package-mj", categoryId: "packages", name: { ar: "بكج MJ", en: "MJ Package" }, durationMinutes: 45, price: { ar: "25 د.أ", en: "25 JOD" }, details: { ar: "حلاقة شعر ولحية + إكسبريس فيشل.", en: "Haircut and beard + express facial." }, specialty: "hair" },
-  { id: "package-mj-2", categoryId: "packages", name: { ar: "MJ 2", en: "MJ 2" }, durationMinutes: 60, price: { ar: "35 د.أ", en: "35 JOD" }, details: { ar: "بدكير يد وقدم + شعر ولحية + سشوار.", en: "Hand and foot care + haircut and beard + blow dry." }, specialty: "hair" },
-  { id: "package-mj-super", categoryId: "packages", name: { ar: "MJ SUPER", en: "MJ SUPER" }, durationMinutes: 60, startIntervalMinutes: 60, showDuration: false, price: { ar: "80 د.أ", en: "80 JOD" }, details: { ar: "شعر + لحية + سشوار + بدكير يد وقدم + هيدرافيشل.", en: "Hair + beard + blow dry + hand and foot care + hydrafacial." }, specialty: "hair" },
-  { id: "package-full-express", categoryId: "packages", name: { ar: "بكج الإكسبريس", en: "Express Package" }, durationMinutes: 60, startIntervalMinutes: 60, showDuration: false, price: { ar: "50 د.أ", en: "50 JOD" }, details: { ar: "بدكير يد وقدم + شعر ولحية + سشوار + إكسبريس فيشل.", en: "Hand and foot care + haircut and beard + blow dry + express facial." }, specialty: "hair" },
-  { id: "package-groom", categoryId: "packages", name: { ar: "بكج العريس", en: "Groom Package" }, durationMinutes: 60, startIntervalMinutes: 60, showDuration: false, price: { ar: "100 د.أ", en: "100 JOD" }, details: { ar: "30 دقيقة مساج + بدكير يد وأقدام + شعر ولحية + أدفانس سوبر للبشرة.", en: "30-minute massage + hand and foot care + haircut and beard + Advanced Super facial." }, specialty: "hair" },
+  { id: "package-mj", categoryId: "packages", name: { ar: "بكج MJ", en: "MJ Package" }, durationMinutes: 45, price: { ar: "25 د.أ", en: "25 JOD" }, details: { ar: "حلاقة شعر ولحية + إكسبريس فيشل.", en: "Haircut and beard + express facial." }, specialty: "hair", resources: [
+    { specialty: "hair", durationMinutes: 45, label: { ar: "الشعر واللحية", en: "Hair & beard" } },
+    { specialty: "skin", durationMinutes: 25, label: { ar: "إكسبريس فيشل", en: "Express facial" } },
+  ] },
+  { id: "package-mj-2", categoryId: "packages", name: { ar: "MJ 2", en: "MJ 2" }, durationMinutes: 60, price: { ar: "35 د.أ", en: "35 JOD" }, details: { ar: "بدكير يد وقدم + شعر ولحية + سشوار.", en: "Hand and foot care + haircut and beard + blow dry." }, specialty: "hair", resources: [
+    { specialty: "hair", durationMinutes: 45, label: { ar: "الشعر واللحية", en: "Hair & beard" } },
+    { specialty: "nails", durationMinutes: 45, label: { ar: "العناية باليدين والقدمين", en: "Hand & foot care" } },
+  ] },
+  { id: "package-mj-super", categoryId: "packages", name: { ar: "MJ SUPER", en: "MJ SUPER" }, durationMinutes: 60, startIntervalMinutes: 60, showDuration: false, price: { ar: "80 د.أ", en: "80 JOD" }, details: { ar: "شعر + لحية + سشوار + بدكير يد وقدم + هيدرافيشل.", en: "Hair + beard + blow dry + hand and foot care + hydrafacial." }, specialty: "hair", resources: [
+    { specialty: "hair", durationMinutes: 45, label: { ar: "الشعر واللحية", en: "Hair & beard" } },
+    { specialty: "nails", durationMinutes: 45, label: { ar: "العناية باليدين والقدمين", en: "Hand & foot care" } },
+    { specialty: "skin", durationMinutes: 45, label: { ar: "هيدرافيشل", en: "Hydrafacial" } },
+  ] },
+  { id: "package-full-express", categoryId: "packages", name: { ar: "بكج الإكسبريس", en: "Express Package" }, durationMinutes: 60, startIntervalMinutes: 60, showDuration: false, price: { ar: "50 د.أ", en: "50 JOD" }, details: { ar: "بدكير يد وقدم + شعر ولحية + سشوار + إكسبريس فيشل.", en: "Hand and foot care + haircut and beard + blow dry + express facial." }, specialty: "hair", resources: [
+    { specialty: "hair", durationMinutes: 45, label: { ar: "الشعر واللحية", en: "Hair & beard" } },
+    { specialty: "nails", durationMinutes: 45, label: { ar: "العناية باليدين والقدمين", en: "Hand & foot care" } },
+    { specialty: "skin", durationMinutes: 25, label: { ar: "إكسبريس فيشل", en: "Express facial" } },
+  ] },
+  { id: "package-groom", categoryId: "packages", name: { ar: "بكج العريس", en: "Groom Package" }, durationMinutes: 60, startIntervalMinutes: 60, showDuration: false, price: { ar: "100 د.أ", en: "100 JOD" }, details: { ar: "30 دقيقة مساج + بدكير يد وأقدام + شعر ولحية + أدفانس سوبر للبشرة.", en: "30-minute massage + hand and foot care + haircut and beard + Advanced Super facial." }, specialty: "hair", resources: [
+    { specialty: "hair", durationMinutes: 45, label: { ar: "الشعر واللحية", en: "Hair & beard" } },
+    { specialty: "nails", durationMinutes: 45, label: { ar: "العناية باليدين والقدمين", en: "Hand & foot care" } },
+    { specialty: "skin", durationMinutes: 60, label: { ar: "العناية بالبشرة والمساج", en: "Skin care & massage" } },
+  ] },
 ];
 
 export const bookingStaff: BookingStaff[] = [
@@ -80,6 +109,18 @@ export const bookingStaff: BookingStaff[] = [
   { id: "aows", name: "AOWS", role: { ar: "مصفف شعر", en: "Hair Stylist" }, specialty: "hair" },
   { id: "skin-specialist", name: "مختص العناية بالبشرة", role: { ar: "أخصائي عناية بالبشرة", en: "Skin Care Specialist" }, specialty: "skin" },
 ];
+
+export const staffOperationalDefaults: Record<string, StaffOperationalDefault> = {
+  bahaa: { startMinute: 12 * 60, endMinute: 21 * 60, whatsappPhone: "962798826453" },
+  m7m7: { startMinute: 12 * 60, endMinute: 21 * 60, whatsappPhone: "962791918334" },
+  mustafa: { startMinute: 12 * 60, endMinute: 23 * 60, whatsappPhone: "962796152602" },
+  amro: { startMinute: 12 * 60, endMinute: 23 * 60, whatsappPhone: "962796174628" },
+  osaid: { startMinute: 12 * 60, endMinute: 23 * 60, whatsappPhone: "962797886326" },
+  ali: { startMinute: 12 * 60, endMinute: 23 * 60 },
+  aows: { startMinute: 12 * 60, endMinute: 23 * 60 },
+  mera: { startMinute: 12 * 60, endMinute: 23 * 60 },
+  "skin-specialist": { startMinute: 12 * 60, endMinute: 23 * 60 },
+};
 
 export function minutesToTime(minutes: number, locale: Locale = "ar") {
   const normalized = ((minutes % (24 * 60)) + 24 * 60) % (24 * 60);

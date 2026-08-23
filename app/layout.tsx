@@ -10,19 +10,10 @@ export const metadata: Metadata = {
   title: "MJ Hair Salon",
   description:
     "MJ Hair Salon by Mustafa Alkhateeb — precision grooming and modern care in Amman.",
-  other: {
-    "codex-preview": "development",
-  },
   icons: {
     icon: "/assets/mj-logo.jpeg",
     shortcut: "/assets/mj-logo.jpeg",
     apple: "/assets/mj-logo.jpeg",
-  },
-  manifest: "/manifest.webmanifest",
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "black-translucent",
-    title: "MJ Control",
   },
 };
 

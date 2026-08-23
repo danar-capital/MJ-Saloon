@@ -1,17 +1,25 @@
 {
-  "name": "MJ Control — Hair Salon Operations",
-  "short_name": "MJ Control",
+  "name": "MJ Team — Hair Salon Operations",
+  "short_name": "MJ Team",
+  "id": "/staff",
   "description": "مواعيد وحالة فريق MJ Hair Salon",
   "start_url": "/staff",
-  "scope": "/",
+  "scope": "/staff",
   "display": "standalone",
+  "display_override": ["standalone"],
+  "launch_handler": { "client_mode": "navigate-existing" },
+  "handle_links": "preferred",
   "orientation": "any",
-  "background_color": "#07131c",
-  "theme_color": "#07131c",
+  "background_color": "#03121b",
+  "theme_color": "#03121b",
   "lang": "ar",
   "dir": "rtl",
   "icons": [
-    { "src": "/assets/mj-control-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "/assets/mj-control-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
-  ]
+    { "src": "/assets/mj-control-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/mj-control-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/mj-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/assets/mj-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "categories": ["business", "productivity"],
+  "prefer_related_applications": false
 }

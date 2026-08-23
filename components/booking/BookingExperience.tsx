@@ -67,8 +67,8 @@ const copy = {
     noSlots: "لا توجد أوقات تستوعب هذا الحجز في اليوم المختار. جرّب يومًا آخر أو مختصًا متاحًا.",
     schedule: "ترتيب الموعد",
     person: "شخص",
-    detailsTitle: "أدخل بيانات صاحب الحجز",
-    firstName: "الاسم الأول",
+    detailsTitle: "أدخل الاسم الرباعي لصاحب الحجز",
+    firstName: "الاسم الأول واسم الأب والجد",
     lastName: "اسم العائلة",
     phone: "رقم واتساب",
     phoneHint: "سنرسل رمز تأكيد من 6 أرقام. لا يوجد دفع إلكتروني.",
@@ -86,10 +86,9 @@ const copy = {
     loading: "لحظة واحدة…",
     error: "تعذر إكمال الطلب. راجع البيانات وحاول مرة أخرى.",
     slotGone: "هذا الوقت حُجز للتو. اختر وقتًا آخر من القائمة.",
-    policy: "الحجز مفتوح حتى 30 دقيقة قبل الموعد · الدوام يوميًا من 11:00 صباحًا إلى 10:00 مساءً · لا يوجد دفع إلكتروني.",
-    daily: "يوميًا · 11:00 صباحًا — 10:00 مساءً",
+    policy: "الحجز مفتوح حتى 30 دقيقة قبل الموعد · تبدأ المواعيد يوميًا من 12:00 ظهرًا · لا يوجد دفع إلكتروني.",
+    daily: "المواعيد يوميًا · 12:00 ظهرًا — 11:00 مساءً",
     duration: "دقيقة",
-    hourly: "حجز على رأس كل ساعة",
     selectAll: "أكمل اختيارات جميع الأشخاص للمتابعة.",
   },
   en: {
@@ -121,9 +120,9 @@ const copy = {
     noSlots: "No time can fit the complete booking on this date. Try another day or an available specialist.",
     schedule: "Appointment schedule",
     person: "Guest",
-    detailsTitle: "Enter the booking owner’s details",
-    firstName: "First name",
-    lastName: "Last name",
+    detailsTitle: "Enter the booking owner’s full name",
+    firstName: "First, middle & father’s names",
+    lastName: "Family name",
     phone: "WhatsApp number",
     phoneHint: "We’ll send a 6-digit verification code. No online payment is required.",
     sendOtp: "Send WhatsApp code",
@@ -140,10 +139,9 @@ const copy = {
     loading: "One moment…",
     error: "We couldn’t complete the request. Check the details and try again.",
     slotGone: "That time was just booked. Please choose another slot.",
-    policy: "Book up to 30 minutes before · open daily from 11:00 AM to 10:00 PM · no online payment.",
-    daily: "Daily · 11:00 AM — 10:00 PM",
+    policy: "Book up to 30 minutes before · appointments start daily at 12:00 PM · no online payment.",
+    daily: "Appointments daily · 12:00 PM — 11:00 PM",
     duration: "min",
-    hourly: "Starts on the hour",
     selectAll: "Complete every guest’s selection to continue.",
   },
 } as const;
@@ -294,7 +292,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
   };
 
   const addGuest = () => {
-    setGuests((current) => [...current, { serviceId: current[0]?.serviceId || "haircut", staffId: "any", label: "" }]);
+    setGuests((current) => current.length >= 6 ? current : [...current, { serviceId: current[0]?.serviceId || "haircut", staffId: "any", label: "" }]);
     resetAvailability();
   };
 
@@ -362,8 +360,11 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
   }
 
   const sendOtp = async () => {
-    if (!person.firstName.trim() || !person.lastName.trim() || person.phone.replace(/\D/g, "").length < 9) {
-      setError(t.error);
+    const fullNameWords = `${person.firstName} ${person.lastName}`.trim().split(/\s+/).filter(Boolean);
+    if (fullNameWords.length < 4 || person.phone.replace(/\D/g, "").length < 9) {
+      setError(fullNameWords.length < 4
+        ? (lang === "ar" ? "اكتب الاسم الرباعي كاملًا حتى يُحفظ سجل العميل بشكل صحيح." : "Enter the customer’s complete four-part name.")
+        : t.error);
       return;
     }
     setBusy(true);
@@ -519,7 +520,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
                             const disabled = service.status === "disabled" || (service.status === "off_today" && (!service.status_date || service.status_date === date));
                             return (
                               <button type="button" key={service.id} disabled={disabled} className={guest.serviceId === service.id ? "active" : ""} onClick={() => updateGuest(index, { serviceId: service.id })}>
-                                <span><strong>{service.name[lang]}</strong><small>{service.showDuration === false ? t.hourly : `${service.durationMinutes} ${t.duration}`}</small>{service.details && <em>{service.details[lang]}</em>}</span><b>{disabled ? (service.status === "off_today" ? t.off : t.unavailable) : service.price[lang]}</b>
+                                <span><strong>{service.name[lang]}</strong>{service.showDuration !== false && <small>{service.durationMinutes} {t.duration}</small>}{service.details && <em>{service.details[lang]}</em>}</span><b>{disabled ? (service.status === "off_today" ? t.off : t.unavailable) : service.price[lang]}</b>
                               </button>
                             );
                           })}
@@ -527,7 +528,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
                       </article>
                     );
                   })}
-                  <button type="button" className="add-guest" onClick={addGuest}><Plus size={18} />{t.addGuest}</button>
+                  {guests.length < 6 && <button type="button" className="add-guest" onClick={addGuest}><Plus size={18} />{t.addGuest}</button>}
                 </div>
               )}
 

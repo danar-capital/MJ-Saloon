@@ -3,7 +3,7 @@
   "short_name": "MJ Team",
   "id": "/staff",
   "description": "مواعيد وحالة فريق MJ Hair Salon",
-  "start_url": "/staff",
+  "start_url": "/staff?app=1",
   "scope": "/staff",
   "display": "standalone",
   "display_override": ["standalone"],

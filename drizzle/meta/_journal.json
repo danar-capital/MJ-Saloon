@@ -43,6 +43,13 @@
       "when": 1787494848258,
       "tag": "0005_majestic_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788011317344,
+      "tag": "0006_fat_sleeper",
+      "breakpoints": true
     }
   ]
 }

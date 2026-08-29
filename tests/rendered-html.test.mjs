@@ -27,6 +27,8 @@ test("renders production metadata and a deferred hero video", async () => {
     response.headers.get("content-type") ?? "",
     /^text\/html\b/i,
   );
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
   const html = await response.text();
   assert.doesNotMatch(html, /name=["']codex-preview["']/i);
   const heroVideo = html.match(/<video(?=[^>]*\bclass=["'][^"']*\bhero-video\b[^"']*["'])[^>]*>/i)?.[0] ?? "";

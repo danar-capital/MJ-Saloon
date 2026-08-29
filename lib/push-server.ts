@@ -16,9 +16,42 @@ type PushOutboxRow = {
   expires_at: number;
 };
 
-type PushDeliveryRow = {
-  subscription_id: string;
-  delivered_at: string | null;
+// Keep every scheduled Worker invocation comfortably below the D1 Free plan's
+// 50-query ceiling, even when cleanup and the cron heartbeat run together.
+export const PUSH_OUTBOX_BATCH_SIZE = 3;
+export const PUSH_SUBSCRIPTIONS_PER_PASS = 2;
+export const PUSH_FAST_OUTBOX_BATCH_SIZE = 2;
+export const PUSH_FAST_SUBSCRIPTIONS_PER_PASS = 1;
+
+export function pendingPushSubscriptionsSql(limit = PUSH_SUBSCRIPTIONS_PER_PASS) {
+  const safeLimit = Number.isInteger(limit)
+    ? Math.min(PUSH_SUBSCRIPTIONS_PER_PASS, Math.max(1, limit))
+    : PUSH_SUBSCRIPTIONS_PER_PASS;
+  return `
+    SELECT sps.id, sps.endpoint, sps.p256dh, sps.auth
+    FROM staff_push_subscriptions sps
+    JOIN staff_accounts sa ON sa.id = sps.account_id
+    LEFT JOIN staff_push_deliveries spd
+      ON spd.subscription_id = sps.id AND spd.outbox_id = ?
+    WHERE sa.active = 1 AND sa.staff_id = ? AND sps.expires_at > ?
+      AND (spd.id IS NULL OR (spd.delivered_at IS NULL AND spd.next_attempt_at <= ?))
+    ORDER BY
+      CASE WHEN spd.id IS NULL THEN 0 ELSE 1 END,
+      COALESCE(spd.attempts, 0),
+      COALESCE(spd.next_attempt_at, 0),
+      sps.updated_at DESC
+    LIMIT ${safeLimit}
+  `;
+}
+
+type DrainPushOptions = {
+  staffId?: string;
+  bookingId?: string;
+  staffPriority?: readonly string[];
+  outboxLimit?: number;
+  subscriptionLimit?: number;
+  cleanup?: boolean;
+  finalize?: boolean;
 };
 
 function runtimeEnv() {
@@ -40,6 +73,14 @@ function vapidDetails(): VapidDetails | null {
 
 export function pushConfigured() {
   return Boolean(vapidDetails());
+}
+
+export async function markPushCronHeartbeat() {
+  if (!env.DB) return;
+  await env.DB.prepare(`
+    INSERT INTO app_migrations (id, applied_at) VALUES ('push-cron-heartbeat', CURRENT_TIMESTAMP)
+    ON CONFLICT(id) DO UPDATE SET applied_at = CURRENT_TIMESTAMP
+  `).run();
 }
 
 export async function sendStaffPushTest(accountId: string, displayName: string) {
@@ -89,22 +130,49 @@ function retryDelay(attempts: number) {
   return Math.min(5 * 60_000, 2_000 * (2 ** Math.min(7, Math.max(0, attempts - 1))));
 }
 
-export async function drainStaffPushOutbox(staffId?: string, bookingId?: string) {
+let lastCleanupAt = 0;
+
+async function cleanupPushState(now: number) {
+  if (now - lastCleanupAt < 5 * 60_000) return;
+  lastCleanupAt = now;
+  try {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM staff_push_deliveries WHERE outbox_id IN (SELECT id FROM staff_push_outbox WHERE expires_at <= ? OR (delivered_at IS NOT NULL AND created_at < datetime('now', '-7 days')))").bind(now),
+      env.DB.prepare("DELETE FROM staff_push_outbox WHERE expires_at <= ? OR (delivered_at IS NOT NULL AND created_at < datetime('now', '-7 days'))").bind(now),
+      env.DB.prepare("DELETE FROM staff_push_deliveries WHERE subscription_id IN (SELECT id FROM staff_push_subscriptions WHERE expires_at <= ?)").bind(now),
+      env.DB.prepare("DELETE FROM staff_push_subscriptions WHERE expires_at <= ?").bind(now),
+    ]);
+  } catch (error) {
+    lastCleanupAt = 0;
+    throw error;
+  }
+}
+
+export async function drainStaffPushOutbox(options: DrainPushOptions = {}) {
   const details = vapidDetails();
   if (!details || !env.DB) return { configured: false, delivered: 0, pending: 0, retryable: 0 };
 
   const now = Date.now();
-  await env.DB.prepare("DELETE FROM staff_push_deliveries WHERE outbox_id IN (SELECT id FROM staff_push_outbox WHERE expires_at <= ? OR (delivered_at IS NOT NULL AND created_at < datetime('now', '-7 days')))" )
-    .bind(now).run();
-  await env.DB.prepare("DELETE FROM staff_push_outbox WHERE expires_at <= ? OR (delivered_at IS NOT NULL AND created_at < datetime('now', '-7 days'))")
-    .bind(now).run();
-  await env.DB.prepare("DELETE FROM staff_push_deliveries WHERE subscription_id IN (SELECT id FROM staff_push_subscriptions WHERE expires_at <= ?)").bind(now).run();
-  await env.DB.prepare("DELETE FROM staff_push_subscriptions WHERE expires_at <= ?").bind(now).run();
+  if (options.cleanup !== false) await cleanupPushState(now);
+  const outboxLimit = Number.isInteger(options.outboxLimit)
+    ? Math.min(PUSH_FAST_OUTBOX_BATCH_SIZE, Math.max(1, options.outboxLimit!))
+    : PUSH_OUTBOX_BATCH_SIZE;
+  const subscriptionLimit = Number.isInteger(options.subscriptionLimit)
+    ? Math.min(PUSH_SUBSCRIPTIONS_PER_PASS, Math.max(1, options.subscriptionLimit!))
+    : PUSH_SUBSCRIPTIONS_PER_PASS;
+  const finalize = options.finalize !== false;
   let sql = "SELECT id, staff_id, payload, attempts, expires_at FROM staff_push_outbox WHERE delivered_at IS NULL AND next_attempt_at <= ? AND expires_at > ?";
   const bindings: Array<string | number> = [now, now];
-  if (staffId) { sql += " AND staff_id = ?"; bindings.push(staffId); }
-  if (bookingId) { sql += " AND booking_id = ?"; bindings.push(bookingId); }
-  sql += " ORDER BY created_at LIMIT 25";
+  if (options.staffId) { sql += " AND staff_id = ?"; bindings.push(options.staffId); }
+  if (options.bookingId) { sql += " AND booking_id = ?"; bindings.push(options.bookingId); }
+  const staffPriority = [...new Set(options.staffPriority ?? [])].filter(Boolean).slice(0, 16);
+  if (staffPriority.length) {
+    sql += ` ORDER BY CASE staff_id ${staffPriority.map((_, index) => `WHEN ? THEN ${index}`).join(" ")} ELSE ${staffPriority.length} END, created_at, id`;
+    bindings.push(...staffPriority);
+  } else {
+    sql += " ORDER BY created_at, id";
+  }
+  sql += ` LIMIT ${outboxLimit}`;
   const query = env.DB.prepare(sql).bind(...bindings);
   const rows = await query.all<PushOutboxRow>();
   let delivered = 0;
@@ -125,25 +193,36 @@ export async function drainStaffPushOutbox(staffId?: string, bookingId?: string)
       return;
     }
 
-    const subscriptions = await env.DB.prepare(`
-      SELECT sps.id, sps.endpoint, sps.p256dh, sps.auth
-      FROM staff_push_subscriptions sps
-      JOIN staff_accounts sa ON sa.id = sps.account_id
-      WHERE sa.active = 1 AND sa.staff_id = ? AND sps.expires_at > ?
-    `).bind(row.staff_id, now).all<PushSubscriptionRow>();
+    const subscriptions = await env.DB.prepare(pendingPushSubscriptionsSql(subscriptionLimit))
+      .bind(row.id, row.staff_id, now, now).all<PushSubscriptionRow>();
     if (!subscriptions.results.length) {
-      pending += 1;
-      await env.DB.prepare("UPDATE staff_push_outbox SET next_attempt_at = ?, last_error = 'NO_ACTIVE_SUBSCRIPTION', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-        .bind(Math.min(row.expires_at, now + 5 * 60_000), row.id).run();
+      if (!finalize) {
+        pending += 1;
+        return;
+      }
+      const deliveryState = await env.DB.prepare(`
+        SELECT
+          COUNT(*) AS active_count,
+          SUM(CASE WHEN spd.delivered_at IS NULL THEN 1 ELSE 0 END) AS pending_count
+        FROM staff_push_subscriptions sps
+        JOIN staff_accounts sa ON sa.id = sps.account_id
+        LEFT JOIN staff_push_deliveries spd ON spd.subscription_id = sps.id AND spd.outbox_id = ?
+        WHERE sa.active = 1 AND sa.staff_id = ? AND sps.expires_at > ?
+      `).bind(row.id, row.staff_id, now).first<{ active_count: number; pending_count: number | null }>();
+      if ((deliveryState?.active_count ?? 0) > 0 && (deliveryState?.pending_count ?? 0) === 0) {
+        delivered += 1;
+        await env.DB.prepare("UPDATE staff_push_outbox SET delivered_at = CURRENT_TIMESTAMP, last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+          .bind(row.id).run();
+      } else {
+        pending += 1;
+        await env.DB.prepare("UPDATE staff_push_outbox SET next_attempt_at = ?, last_error = 'NO_ACTIVE_SUBSCRIPTION', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+          .bind(Math.min(row.expires_at, now + 5 * 60_000), row.id).run();
+      }
       return;
     }
 
-    const deliveries = await env.DB.prepare("SELECT subscription_id, delivered_at FROM staff_push_deliveries WHERE outbox_id = ?")
-      .bind(row.id).all<PushDeliveryRow>();
-    const deliveredSubscriptions = new Set(deliveries.results.filter((entry) => entry.delivered_at).map((entry) => entry.subscription_id));
     let transientFailures = 0;
     await Promise.all(subscriptions.results.map(async (subscriptionRow) => {
-      if (deliveredSubscriptions.has(subscriptionRow.id)) return;
       const subscription: PushSubscription = {
         endpoint: subscriptionRow.endpoint,
         keys: { p256dh: subscriptionRow.p256dh, auth: subscriptionRow.auth },
@@ -181,6 +260,12 @@ export async function drainStaffPushOutbox(staffId?: string, bookingId?: string)
       }
     }));
 
+    if (!finalize) {
+      pending += 1;
+      if (transientFailures) retryable += 1;
+      return;
+    }
+
     const deliveryState = await env.DB.prepare(`
       SELECT
         COUNT(*) AS active_count,
@@ -197,30 +282,13 @@ export async function drainStaffPushOutbox(staffId?: string, bookingId?: string)
     } else {
       pending += 1;
       if (transientFailures) retryable += 1;
+      const lastError = transientFailures
+        ? "DELIVERY_RETRY"
+        : (deliveryState?.active_count ?? 0) > 0 ? "DELIVERY_PENDING" : "NO_ACTIVE_SUBSCRIPTION";
       await env.DB.prepare("UPDATE staff_push_outbox SET next_attempt_at = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-        .bind(Math.min(row.expires_at, now + retryDelay(claimed.attempts)), transientFailures ? "DELIVERY_RETRY" : "NO_ACTIVE_SUBSCRIPTION", row.id).run();
+        .bind(Math.min(row.expires_at, now + retryDelay(claimed.attempts)), lastError, row.id).run();
     }
   }));
 
-  return { configured: true, delivered, pending, retryable };
-}
-
-export async function deliverStaffPushOutboxWithRetry(bookingId: string) {
-  let delivered = 0;
-  let pending = 0;
-  let retryable = 0;
-  for (const delay of [0, 2_000, 4_000]) {
-    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-    const result = await drainStaffPushOutbox(undefined, bookingId);
-    if (!result.configured) return result;
-    delivered += result.delivered;
-    pending = result.pending;
-    retryable = result.retryable;
-    if (!retryable) break;
-  }
-  const backlog = await drainStaffPushOutbox();
-  delivered += backlog.delivered;
-  pending += backlog.pending;
-  retryable += backlog.retryable;
   return { configured: true, delivered, pending, retryable };
 }

@@ -13,7 +13,7 @@ function isMjWorker(registration: ServiceWorkerRegistration) {
   return script ? new URL(script).pathname === "/sw.js" : false;
 }
 
-export async function registerStaffServiceWorker(timeoutMs = 1_500) {
+export async function registerStaffServiceWorker(timeoutMs = 10_000) {
   if (!("serviceWorker" in navigator)) return null;
   const registrations = await withTimeout(navigator.serviceWorker.getRegistrations(), timeoutMs).catch(() => [] as ServiceWorkerRegistration[]);
   await Promise.all(registrations
@@ -23,13 +23,13 @@ export async function registerStaffServiceWorker(timeoutMs = 1_500) {
   return withTimeout(navigator.serviceWorker.ready, timeoutMs).catch(() => registration);
 }
 
-export async function getStaffServiceWorker(timeoutMs = 1_200) {
+export async function getStaffServiceWorker(timeoutMs = 10_000) {
   if (!("serviceWorker" in navigator)) return null;
   const existing = await findStaffServiceWorker(timeoutMs);
   return existing ?? registerStaffServiceWorker(timeoutMs).catch(() => null);
 }
 
-export async function findStaffServiceWorker(timeoutMs = 500) {
+export async function findStaffServiceWorker(timeoutMs = 3_000) {
   if (!("serviceWorker" in navigator)) return null;
   return await withTimeout(navigator.serviceWorker.getRegistration("/staff"), timeoutMs).catch(() => null) ?? null;
 }

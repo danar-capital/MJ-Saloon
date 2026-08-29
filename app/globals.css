@@ -395,6 +395,10 @@ canvas {
   100% { transform: translate3d(0, -1%, 0); }
 }
 
+@media (max-width: 720px), (prefers-reduced-motion: reduce) {
+  .hero-grain { animation: none; transform: none; opacity: 0.035; }
+}
+
 .portal {
   position: absolute;
   top: 50%;
@@ -3223,6 +3227,9 @@ body.booking-open {
 .mj-search input { width: 100%; border: 0; outline: 0; background: transparent; color: white; font: 10px "IBM Plex Sans Arabic",sans-serif; }
 .mj-search input::placeholder { color: #61717b; }
 .mj-list { display: grid; gap: 9px; }
+.mj-load-more { min-height: 48px; border: 1px solid rgba(255,255,255,.16); border-radius: 14px; background: rgba(255,255,255,.055); color: white; cursor: pointer; font: 500 9px "IBM Plex Sans Arabic", sans-serif; }
+.mj-load-more:disabled { cursor: wait; opacity: .62; }
+.mj-pagination-note { margin: 8px 0 0; color: rgba(255,255,255,.52); font-size: 9px; text-align: center; }
 .mj-appointment { display: grid; min-height: 91px; grid-template-columns: 80px 2px minmax(0,1fr) 42px; align-items: center; gap: 12px; padding: 12px; border: 1px solid rgba(110,143,159,.19); border-radius: 15px; background: rgba(255,255,255,.022); }
 .mj-appointment-time { display: flex; flex-direction: column; gap: 3px; direction: rtl; }
 .mj-appointment-time small { color: var(--mj-app-red); font-size: 7px; }

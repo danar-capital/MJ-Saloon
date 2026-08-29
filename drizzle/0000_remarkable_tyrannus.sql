@@ -3,6 +3,7 @@ CREATE TABLE `booking_groups` (
 	`booking_code` text NOT NULL,
 	`first_name` text NOT NULL,
 	`last_name` text NOT NULL,
+	`full_name` text,
 	`phone` text NOT NULL,
 	`locale` text DEFAULT 'ar' NOT NULL,
 	`status` text DEFAULT 'confirmed' NOT NULL,
@@ -26,6 +27,7 @@ CREATE TABLE `booking_items` (
 	`end_minute` integer NOT NULL,
 	`status` text DEFAULT 'confirmed' NOT NULL,
 	`created_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	`updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	FOREIGN KEY (`booking_id`) REFERENCES `booking_groups`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
@@ -92,6 +94,11 @@ CREATE TABLE `staff_members` (
 	`specialty` text NOT NULL,
 	`status` text DEFAULT 'available' NOT NULL,
 	`status_date` text,
+	`status_started_at` text,
+	`weekly_off_day` integer,
+	`profile_name` text,
+	`profile_image_key` text,
+	`profile_image_updated_at` text,
 	`sort_order` integer DEFAULT 0 NOT NULL,
 	`updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );

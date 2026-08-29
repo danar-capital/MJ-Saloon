@@ -1,4 +1,4 @@
-import { apiError } from "@/lib/booking-server";
+import { apiError, assertPublicRateLimit } from "@/lib/booking-server";
 import { assertSameOrigin, clearLegacyStaffSessionCookie, loginStaff, staffSessionCookie } from "@/lib/staff-auth";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +8,8 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const payload = await request.json() as { username?: string; password?: string; remember?: boolean };
     if (!payload.username || !payload.password) return Response.json({ error: "CREDENTIALS_REQUIRED" }, { status: 400 });
+    if (payload.username.length > 64 || payload.password.length > 128) return Response.json({ error: "INVALID_CREDENTIALS" }, { status: 401 });
+    await assertPublicRateLimit(request, "staff-login", "all-users", 30, 10 * 60_000);
     const remembered = payload.remember === true;
     const clientFingerprint = request.headers.get("cf-connecting-ip") ?? request.headers.get("x-real-ip") ?? "unknown";
     const result = await loginStaff(payload.username, payload.password, remembered, clientFingerprint);

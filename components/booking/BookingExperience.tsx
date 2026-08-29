@@ -29,6 +29,7 @@ import {
   type BookingStaff,
   type Locale,
 } from "@/lib/booking-config";
+import { shiftIsoDate } from "@/lib/date-utils";
 
 type AvailabilityStaff = BookingStaff & { status: "available" | "off_today" | "disabled"; status_date?: string | null; breakNow?: boolean };
 type AvailabilityService = BookingService & { status: "available" | "off_today" | "disabled"; status_date?: string | null };
@@ -150,12 +151,6 @@ function todayInAmman() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: BOOKING_RULES.timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 }
 
-function addDays(date: string, days: number) {
-  const value = new Date(`${date}T00:00:00+03:00`);
-  value.setDate(value.getDate() + days);
-  return value.toISOString().slice(0, 10);
-}
-
 function displayDate(date: string, lang: Locale) {
   return new Intl.DateTimeFormat(lang === "ar" ? "ar-JO" : "en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: BOOKING_RULES.timezone }).format(new Date(`${date}T12:00:00+03:00`));
 }
@@ -185,6 +180,8 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
   const dateInputRef = useRef<HTMLInputElement>(null);
   const stepRef = useRef(0);
   const onCloseRef = useRef(onClose);
+  const availabilitySequenceRef = useRef(0);
+  const availabilityControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
@@ -195,7 +192,9 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
     const backgroundVideos = Array.from(document.querySelectorAll<HTMLVideoElement>(".hero-video, .cinema-video"));
     const playing = backgroundVideos.filter((video) => !video.paused);
     backgroundVideos.forEach((video) => video.pause());
-    void fetch("/api/booking/config", { cache: "no-store" })
+    const configController = new AbortController();
+    const configTimeout = window.setTimeout(() => configController.abort(), 10_000);
+    void fetch("/api/booking/config", { cache: "no-store", signal: configController.signal })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("CONFIG_ERROR")))
       .then((data: unknown) => {
         const catalog = data as { staff?: AvailabilityStaff[]; services?: AvailabilityService[] };
@@ -206,6 +205,9 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
     return () => {
       document.body.classList.remove("booking-open");
       document.documentElement.classList.remove("booking-open");
+      configController.abort();
+      window.clearTimeout(configTimeout);
+      availabilityControllerRef.current?.abort();
       playing.forEach((video) => void video.play().catch(() => undefined));
     };
   }, [open]);
@@ -245,7 +247,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
     if (contentRef.current) contentRef.current.scrollTop = 0;
   }, [open, step, result]);
 
-  const maxDate = addDays(todayInAmman(), BOOKING_RULES.bookingHorizonDays);
+  const maxDate = shiftIsoDate(todayInAmman(), BOOKING_RULES.bookingHorizonDays);
   const selectedServices = useMemo(() => guests.map((guest) => getService(guest.serviceId)).filter(Boolean) as BookingService[], [guests]);
 
   const selectDate = (nextDate: string) => {
@@ -339,6 +341,12 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
   };
 
   async function findSlots(targetDate = date) {
+    const sequence = availabilitySequenceRef.current + 1;
+    availabilitySequenceRef.current = sequence;
+    availabilityControllerRef.current?.abort();
+    const controller = new AbortController();
+    availabilityControllerRef.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 10_000);
     setBusy(true);
     setSearchedSlots(true);
     setError("");
@@ -348,14 +356,21 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ date: targetDate, guests }),
+        signal: controller.signal,
       });
       const data = await response.json() as { error?: string; slots?: Slot[] };
       if (!response.ok) throw new Error(data.error || "AVAILABILITY_ERROR");
+      if (availabilitySequenceRef.current !== sequence) return;
       setSlots(data.slots ?? []);
-    } catch {
-      setError(t.error);
+    } catch (caught) {
+      if (controller.signal.aborted || (caught instanceof DOMException && caught.name === "AbortError")) return;
+      if (availabilitySequenceRef.current === sequence) setError(t.error);
     } finally {
-      setBusy(false);
+      window.clearTimeout(timeout);
+      if (availabilitySequenceRef.current === sequence) {
+        availabilityControllerRef.current = null;
+        setBusy(false);
+      }
     }
   }
 
@@ -374,6 +389,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: person.phone }),
+        signal: AbortSignal.timeout(12_000),
       });
       const data = await response.json() as { error?: string; challenge: { id: string; devCode?: string; delivered: boolean } };
       if (!response.ok) throw new Error(data.error || "OTP_ERROR");
@@ -405,6 +421,7 @@ export default function BookingExperience({ lang, initialServiceId, open, onClos
           startMinute: selectedSlot.startMinute,
           guests,
         }),
+        signal: AbortSignal.timeout(15_000),
       });
       const data = await response.json() as { error?: string; booking: BookingResult };
       if (!response.ok) throw new Error(data.error || "CONFIRM_ERROR");

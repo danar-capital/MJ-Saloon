@@ -1,12 +1,10 @@
 import vinext from "vinext";
 import { defineConfig } from "vite";
-import hostingConfig from "./.openai/hosting.json";
-import { sites } from "./build/sites-vite-plugin";
-
-const PRODUCTION_DATABASE_ID =
-  "e81eb19c-cf89-4fe0-b52c-8bd605dcf139";
+import hostingConfig from "./.openai/hosting.json" with { type: "json" };
+import { sites } from "./build/sites-vite-plugin.ts";
 
 const { d1, r2 } = hostingConfig;
+const localDatabaseId = process.env.CLOUDFLARE_D1_DATABASE_ID?.trim();
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
@@ -15,12 +13,15 @@ const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
   triggers: { crons: ["* * * * *"] },
-  d1_databases: d1
+  ...(process.env.WHATSAPP_DEMO_OTP === "true"
+    ? { vars: { WHATSAPP_DEMO_OTP: "true" } }
+    : {}),
+  d1_databases: d1 && localDatabaseId
     ? [
         {
           binding: d1,
           database_name: "mj-saloon-db",
-          database_id: PRODUCTION_DATABASE_ID,
+          database_id: localDatabaseId,
         },
       ]
     : [],

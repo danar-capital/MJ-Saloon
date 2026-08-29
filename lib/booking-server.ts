@@ -1,5 +1,4 @@
 import { env, waitUntil } from "cloudflare:workers";
-import { deliverStaffPushOutboxWithRetry } from "./push-server";
 import {
   BOOKING_RULES,
   bookingServices,
@@ -9,6 +8,7 @@ import {
   staffOperationalDefaults,
   type Locale,
 } from "./booking-config";
+import { drainStaffPushOutbox, PUSH_FAST_OUTBOX_BATCH_SIZE, PUSH_FAST_SUBSCRIPTIONS_PER_PASS } from "./push-server";
 
 export type GuestSelection = {
   serviceId: string;
@@ -57,8 +57,80 @@ type ScheduleRow = {
 const SALON_WHATSAPP = "962797799677";
 const MUSTAFA_WHATSAPP = "962796152602";
 const STAFF_OPERATIONS_MIGRATION = "staff-operations-2026-08-21-v1";
+const RUNTIME_SCHEMA_MIGRATION = "runtime-schema-2026-08-29-v1";
+const CATALOG_SEED_VERSION = "catalog-seed-2026-08-29-v1";
+const REQUIRED_RUNTIME_TABLES = [
+  "api_rate_limits",
+  "app_migrations",
+  "booking_groups",
+  "booking_items",
+  "change_requests",
+  "manage_sessions",
+  "otp_challenges",
+  "otp_redemptions",
+  "schedule_locks",
+  "service_entries",
+  "staff_accounts",
+  "staff_breaks",
+  "staff_login_attempts",
+  "staff_members",
+  "staff_passkey_challenges",
+  "staff_passkeys",
+  "staff_push_deliveries",
+  "staff_push_outbox",
+  "staff_push_subscriptions",
+  "staff_schedules",
+  "staff_sessions",
+  "staff_time_claims",
+  "system_events",
+] as const;
+const MAX_D1_BOUND_PARAMETERS = 100;
 let schemaReady = false;
 let seededDate: string | null = null;
+
+type D1Binding = string | number | null;
+
+function multiRowStatements<T>(
+  db: D1Database,
+  rows: readonly T[],
+  parametersPerRow: number,
+  rowPlaceholder: string,
+  buildSql: (placeholders: string) => string,
+  bindingsForRow: (row: T) => D1Binding[],
+) {
+  if (!Number.isInteger(parametersPerRow) || parametersPerRow < 1 || parametersPerRow > MAX_D1_BOUND_PARAMETERS) {
+    throw new Error("D1_BINDING_BUDGET_INVALID");
+  }
+  const rowsPerStatement = Math.floor(MAX_D1_BOUND_PARAMETERS / parametersPerRow);
+  const statements: D1PreparedStatement[] = [];
+  for (let offset = 0; offset < rows.length; offset += rowsPerStatement) {
+    const chunk = rows.slice(offset, offset + rowsPerStatement);
+    const bindings = chunk.flatMap(bindingsForRow);
+    statements.push(db.prepare(buildSql(chunk.map(() => rowPlaceholder).join(","))).bind(...bindings));
+  }
+  return statements;
+}
+
+function staffScheduleSeedStatements(db: D1Database, updateExisting: boolean) {
+  const rows = bookingStaff.flatMap((member) => {
+    const defaults = staffOperationalDefaults[member.id] ?? {
+      startMinute: BOOKING_RULES.openingMinutes,
+      endMinute: BOOKING_RULES.closingMinutes,
+    };
+    return Array.from({ length: 7 }, (_, weekday) => ({ memberId: member.id, weekday, ...defaults }));
+  });
+  const conflictSql = updateExisting
+    ? "ON CONFLICT(staff_id,weekday) DO UPDATE SET start_minute = excluded.start_minute, end_minute = excluded.end_minute, active = 1, updated_at = CURRENT_TIMESTAMP"
+    : "ON CONFLICT(staff_id,weekday) DO NOTHING";
+  return multiRowStatements(
+    db,
+    rows,
+    5,
+    "(?, ?, ?, ?, ?, 1)",
+    (values) => `INSERT INTO staff_schedules (id, staff_id, weekday, start_minute, end_minute, active) VALUES ${values} ${conflictSql}`,
+    (row) => [`${row.memberId}-${row.weekday}`, row.memberId, row.weekday, row.startMinute, row.endMinute],
+  );
+}
 
 export function getD1() {
   if (!env.DB) throw new Error("BOOKING_DB_UNAVAILABLE");
@@ -72,75 +144,40 @@ function runtimeEnv() {
 export async function ensureBookingSchema() {
   if (schemaReady) return;
   const db = getD1();
-  await db.batch([
-    db.prepare("CREATE TABLE IF NOT EXISTS staff_members (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, role_ar TEXT NOT NULL, role_en TEXT NOT NULL, specialty TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'available', status_date TEXT, status_started_at TEXT, weekly_off_day INTEGER, whatsapp_phone TEXT, profile_name TEXT, profile_image_key TEXT, profile_image_updated_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS service_entries (id TEXT PRIMARY KEY NOT NULL, category_id TEXT NOT NULL, name_ar TEXT NOT NULL, name_en TEXT NOT NULL, duration_minutes INTEGER NOT NULL, price_ar TEXT NOT NULL, price_en TEXT NOT NULL, specialty TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'available', status_date TEXT, sort_order INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS booking_groups (id TEXT PRIMARY KEY NOT NULL, booking_code TEXT NOT NULL UNIQUE, first_name TEXT NOT NULL, last_name TEXT NOT NULL, full_name TEXT, phone TEXT NOT NULL, locale TEXT NOT NULL DEFAULT 'ar', status TEXT NOT NULL DEFAULT 'confirmed', manage_token TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS booking_items (id TEXT PRIMARY KEY NOT NULL, booking_id TEXT NOT NULL, guest_index INTEGER NOT NULL, guest_label TEXT NOT NULL, service_id TEXT NOT NULL, staff_id TEXT NOT NULL, booking_date TEXT NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'confirmed', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (booking_id) REFERENCES booking_groups(id))"),
-    db.prepare("CREATE INDEX IF NOT EXISTS booking_items_staff_booking_idx ON booking_items (staff_id, booking_id)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS booking_groups_phone_created_idx ON booking_groups (phone, created_at)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS schedule_locks (slot_key TEXT PRIMARY KEY NOT NULL, booking_id TEXT NOT NULL, staff_id TEXT NOT NULL, booking_date TEXT NOT NULL, minute INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (booking_id) REFERENCES booking_groups(id))"),
-    db.prepare("CREATE TABLE IF NOT EXISTS otp_challenges (id TEXT PRIMARY KEY NOT NULL, phone TEXT NOT NULL, purpose TEXT NOT NULL, booking_id TEXT, code_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, verified_at INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS otp_redemptions (challenge_id TEXT PRIMARY KEY NOT NULL, booking_id TEXT NOT NULL UNIQUE, redeemed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS manage_sessions (id TEXT PRIMARY KEY NOT NULL, booking_id TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (booking_id) REFERENCES booking_groups(id))"),
-    db.prepare("CREATE TABLE IF NOT EXISTS change_requests (id TEXT PRIMARY KEY NOT NULL, booking_id TEXT NOT NULL, type TEXT NOT NULL, requested_date TEXT, requested_start_minute INTEGER, payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'pending', decision_note TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, decided_at TEXT, FOREIGN KEY (booking_id) REFERENCES booking_groups(id))"),
-    db.prepare("CREATE TABLE IF NOT EXISTS staff_breaks (id TEXT PRIMARY KEY NOT NULL, staff_id TEXT NOT NULL, break_date TEXT NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, note TEXT, status TEXT NOT NULL DEFAULT 'active', created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (staff_id) REFERENCES staff_members(id))"),
-    db.prepare("CREATE INDEX IF NOT EXISTS staff_breaks_schedule_idx ON staff_breaks (staff_id, break_date, start_minute, end_minute)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS staff_time_claims (slot_key TEXT PRIMARY KEY NOT NULL, owner_type TEXT NOT NULL, owner_id TEXT NOT NULL, staff_id TEXT NOT NULL, claim_date TEXT NOT NULL, minute INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (staff_id) REFERENCES staff_members(id))"),
-    db.prepare("CREATE INDEX IF NOT EXISTS staff_time_claims_owner_idx ON staff_time_claims (owner_type, owner_id)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS staff_time_claims_staff_date_idx ON staff_time_claims (staff_id, claim_date, minute)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS staff_schedules (id TEXT PRIMARY KEY NOT NULL, staff_id TEXT NOT NULL, weekday INTEGER NOT NULL, start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (staff_id) REFERENCES staff_members(id))"),
-    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS staff_schedules_staff_day_unique ON staff_schedules (staff_id, weekday)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS staff_schedules_day_idx ON staff_schedules (weekday, staff_id)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS system_events (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, actor_id TEXT, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS system_events_created_idx ON system_events (created_at)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS staff_accounts (id TEXT PRIMARY KEY NOT NULL, staff_id TEXT NOT NULL UNIQUE, username TEXT NOT NULL UNIQUE, password_salt TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'staff', active INTEGER NOT NULL DEFAULT 1, failed_attempts INTEGER NOT NULL DEFAULT 0, locked_until INTEGER, must_change_credentials INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (staff_id) REFERENCES staff_members(id))"),
-    db.prepare("CREATE TABLE IF NOT EXISTS staff_sessions (id TEXT PRIMARY KEY NOT NULL, account_id TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, expires_at INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (account_id) REFERENCES staff_accounts(id))"),
-    db.prepare("CREATE INDEX IF NOT EXISTS staff_sessions_token_idx ON staff_sessions (token_hash, expires_at)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS staff_login_attempts (bucket_key TEXT PRIMARY KEY NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, blocked_until INTEGER, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS staff_push_subscriptions (id TEXT PRIMARY KEY NOT NULL, account_id TEXT NOT NULL, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL, user_agent TEXT, expires_at INTEGER NOT NULL, failure_count INTEGER NOT NULL DEFAULT 0, last_success_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (account_id) REFERENCES staff_accounts(id))"),
-    db.prepare("CREATE INDEX IF NOT EXISTS staff_push_subscriptions_account_idx ON staff_push_subscriptions (account_id, updated_at)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS staff_push_outbox (id TEXT PRIMARY KEY NOT NULL, booking_id TEXT NOT NULL, staff_id TEXT NOT NULL, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL DEFAULT 0, expires_at INTEGER NOT NULL, delivered_at TEXT, last_error TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (booking_id) REFERENCES booking_groups(id), FOREIGN KEY (staff_id) REFERENCES staff_members(id))"),
-    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS staff_push_outbox_booking_staff_unique ON staff_push_outbox (booking_id, staff_id)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS staff_push_outbox_pending_idx ON staff_push_outbox (delivered_at, next_attempt_at, expires_at)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS staff_push_deliveries (id TEXT PRIMARY KEY NOT NULL, outbox_id TEXT NOT NULL, subscription_id TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL DEFAULT 0, delivered_at TEXT, last_error TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (outbox_id) REFERENCES staff_push_outbox(id) ON DELETE CASCADE, FOREIGN KEY (subscription_id) REFERENCES staff_push_subscriptions(id) ON DELETE CASCADE)"),
-    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS staff_push_deliveries_outbox_subscription_unique ON staff_push_deliveries (outbox_id, subscription_id)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS staff_push_deliveries_pending_idx ON staff_push_deliveries (outbox_id, delivered_at, next_attempt_at)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS staff_passkeys (id TEXT PRIMARY KEY NOT NULL, account_id TEXT NOT NULL, credential_id TEXT NOT NULL UNIQUE, public_key TEXT NOT NULL, counter INTEGER NOT NULL DEFAULT 0, transports TEXT NOT NULL DEFAULT '[]', device_type TEXT NOT NULL DEFAULT 'singleDevice', backed_up INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_used_at TEXT, FOREIGN KEY (account_id) REFERENCES staff_accounts(id))"),
-    db.prepare("CREATE INDEX IF NOT EXISTS staff_passkeys_account_idx ON staff_passkeys (account_id, created_at)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS staff_passkey_challenges (id TEXT PRIMARY KEY NOT NULL, account_id TEXT NOT NULL, challenge TEXT NOT NULL, purpose TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (account_id) REFERENCES staff_accounts(id))"),
-    db.prepare("CREATE INDEX IF NOT EXISTS staff_passkey_challenges_lookup_idx ON staff_passkey_challenges (account_id, purpose, expires_at)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS app_migrations (id TEXT PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS api_rate_limits (bucket_key TEXT PRIMARY KEY NOT NULL, window_started_at INTEGER NOT NULL, count INTEGER NOT NULL DEFAULT 0, expires_at INTEGER NOT NULL)"),
-  ]);
-  const staffColumns = await db.prepare("PRAGMA table_info(staff_members)").all<{ name: string }>();
-  if (!staffColumns.results.some((column) => column.name === "whatsapp_phone")) {
-    await db.prepare("ALTER TABLE staff_members ADD COLUMN whatsapp_phone TEXT").run();
+  let applied: { id: string } | null;
+  try {
+    applied = await db.prepare("SELECT id FROM app_migrations WHERE id = ?")
+      .bind(RUNTIME_SCHEMA_MIGRATION).first<{ id: string }>();
+  } catch {
+    throw new Error("BOOKING_SCHEMA_NOT_MIGRATED");
   }
-  if (!staffColumns.results.some((column) => column.name === "status_started_at")) {
-    await db.prepare("ALTER TABLE staff_members ADD COLUMN status_started_at TEXT").run();
-  }
-  if (!staffColumns.results.some((column) => column.name === "weekly_off_day")) {
-    await db.prepare("ALTER TABLE staff_members ADD COLUMN weekly_off_day INTEGER").run();
-  }
-  if (!staffColumns.results.some((column) => column.name === "profile_name")) {
-    await db.prepare("ALTER TABLE staff_members ADD COLUMN profile_name TEXT").run();
-  }
-  if (!staffColumns.results.some((column) => column.name === "profile_image_key")) {
-    await db.prepare("ALTER TABLE staff_members ADD COLUMN profile_image_key TEXT").run();
-  }
-  if (!staffColumns.results.some((column) => column.name === "profile_image_updated_at")) {
-    await db.prepare("ALTER TABLE staff_members ADD COLUMN profile_image_updated_at TEXT").run();
-  }
-  const bookingGroupColumns = await db.prepare("PRAGMA table_info(booking_groups)").all<{ name: string }>();
-  if (!bookingGroupColumns.results.some((column) => column.name === "full_name")) {
-    await db.prepare("ALTER TABLE booking_groups ADD COLUMN full_name TEXT").run();
-    await db.prepare("UPDATE booking_groups SET full_name = TRIM(first_name || ' ' || last_name) WHERE full_name IS NULL OR full_name = ''").run();
-  }
-  const bookingItemColumns = await db.prepare("PRAGMA table_info(booking_items)").all<{ name: string }>();
-  if (!bookingItemColumns.results.some((column) => column.name === "updated_at")) {
-    await db.prepare("ALTER TABLE booking_items ADD COLUMN updated_at TEXT").run();
-    await db.prepare("UPDATE booking_items SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)").run();
+  if (!applied) {
+    const [tablesResult, staffColumnsResult, bookingGroupColumnsResult, bookingItemColumnsResult] = await db.batch([
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'"),
+      db.prepare("PRAGMA table_info(staff_members)"),
+      db.prepare("PRAGMA table_info(booking_groups)"),
+      db.prepare("PRAGMA table_info(booking_items)"),
+    ]);
+    const tables = new Set((tablesResult.results as Array<{ name: string }>).map((row) => row.name));
+    const staffColumns = new Set((staffColumnsResult.results as Array<{ name: string }>).map((row) => row.name));
+    const bookingGroupColumns = new Set((bookingGroupColumnsResult.results as Array<{ name: string }>).map((row) => row.name));
+    const bookingItemColumns = new Set((bookingItemColumnsResult.results as Array<{ name: string }>).map((row) => row.name));
+    const compatible = REQUIRED_RUNTIME_TABLES.every((table) => tables.has(table))
+      && ["status_started_at", "weekly_off_day", "profile_name", "profile_image_key", "profile_image_updated_at", "whatsapp_phone"].every((column) => staffColumns.has(column))
+      && bookingGroupColumns.has("full_name")
+      && bookingItemColumns.has("updated_at");
+    if (!compatible) throw new Error("BOOKING_SCHEMA_NOT_MIGRATED");
+
+    // One-time adoption path for the pre-migration MJ database. These
+    // idempotent indexes are the only schema writes and the marker prevents
+    // them from running again after the first verified request.
+    await db.batch([
+      db.prepare("CREATE INDEX IF NOT EXISTS booking_items_staff_booking_idx ON booking_items (staff_id, booking_id)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS booking_items_date_idx ON booking_items (booking_date, start_minute, booking_id)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS booking_items_staff_date_idx ON booking_items (staff_id, booking_date, start_minute, booking_id)"),
+      db.prepare("CREATE INDEX IF NOT EXISTS booking_groups_phone_created_idx ON booking_groups (phone, created_at)"),
+      db.prepare("INSERT OR IGNORE INTO app_migrations (id) VALUES (?)").bind(RUNTIME_SCHEMA_MIGRATION),
+    ]);
   }
   schemaReady = true;
 }
@@ -163,16 +200,18 @@ export function ammanDateParts(date = new Date()) {
 }
 
 export function normalizePhone(value: string) {
-  const digits = value.replace(/\D/g, "");
-  if (digits.startsWith("00962")) return digits.slice(2);
+  let digits = value.replace(/\D/g, "");
+  if (digits.startsWith("00962")) digits = digits.slice(2);
+  if (digits.startsWith("9620")) return `962${digits.slice(4)}`;
   if (digits.startsWith("962")) return digits;
-  if (digits.startsWith("0") && digits.length >= 10) return `962${digits.slice(1)}`;
+  if (digits.startsWith("0") && digits.length === 10) return `962${digits.slice(1)}`;
+  if (digits.startsWith("7") && digits.length === 9) return `962${digits}`;
   return digits;
 }
 
 export function validPhone(value: string) {
   const normalized = normalizePhone(value);
-  return /^\d{9,15}$/.test(normalized);
+  return /^[1-9]\d{8,14}$/.test(normalized);
 }
 
 export async function ensureCatalogSeed() {
@@ -180,56 +219,49 @@ export async function ensureCatalogSeed() {
   const db = getD1();
   const today = ammanDateParts().date;
   if (seededDate === today) return;
+  const catalogSeedId = `${CATALOG_SEED_VERSION}:${today}`;
+  const alreadySeeded = await db.prepare("SELECT id FROM app_migrations WHERE id = ?")
+    .bind(catalogSeedId).first<{ id: string }>();
+  if (alreadySeeded) {
+    seededDate = today;
+    return;
+  }
   const statements = [
     db.prepare("UPDATE staff_members SET status = 'available', status_date = NULL, status_started_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE status IN ('off_today', 'break') AND status_date IS NOT NULL AND status_date <> ?").bind(today),
     db.prepare("UPDATE service_entries SET status = 'available', status_date = NULL, updated_at = CURRENT_TIMESTAMP WHERE status = 'off_today' AND status_date IS NOT NULL AND status_date <> ?").bind(today),
-    ...bookingStaff.map((member, index) =>
-      db.prepare("INSERT INTO staff_members (id, name, role_ar, role_en, specialty, status, sort_order) VALUES (?, ?, ?, ?, ?, 'available', ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, role_ar = excluded.role_ar, role_en = excluded.role_en, specialty = excluded.specialty, sort_order = excluded.sort_order, updated_at = CURRENT_TIMESTAMP")
-        .bind(member.id, member.name, member.role.ar, member.role.en, member.specialty, index),
+    ...multiRowStatements(
+      db,
+      bookingStaff.map((member, sortOrder) => ({ member, sortOrder })),
+      6,
+      "(?, ?, ?, ?, ?, 'available', ?)",
+      (values) => `INSERT INTO staff_members (id, name, role_ar, role_en, specialty, status, sort_order) VALUES ${values} ON CONFLICT(id) DO UPDATE SET name = excluded.name, role_ar = excluded.role_ar, role_en = excluded.role_en, specialty = excluded.specialty, sort_order = excluded.sort_order, updated_at = CURRENT_TIMESTAMP`,
+      ({ member, sortOrder }) => [member.id, member.name, member.role.ar, member.role.en, member.specialty, sortOrder],
     ),
-    ...bookingServices.map((service, index) =>
-      db.prepare("INSERT INTO service_entries (id, category_id, name_ar, name_en, duration_minutes, price_ar, price_en, specialty, status, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'available', ?) ON CONFLICT(id) DO UPDATE SET category_id = excluded.category_id, name_ar = excluded.name_ar, name_en = excluded.name_en, duration_minutes = excluded.duration_minutes, price_ar = excluded.price_ar, price_en = excluded.price_en, specialty = excluded.specialty, sort_order = excluded.sort_order, updated_at = CURRENT_TIMESTAMP")
-        .bind(service.id, service.categoryId, service.name.ar, service.name.en, service.durationMinutes, service.price.ar, service.price.en, service.specialty, index),
+    ...multiRowStatements(
+      db,
+      bookingServices.map((service, sortOrder) => ({ service, sortOrder })),
+      9,
+      "(?, ?, ?, ?, ?, ?, ?, ?, 'available', ?)",
+      (values) => `INSERT INTO service_entries (id, category_id, name_ar, name_en, duration_minutes, price_ar, price_en, specialty, status, sort_order) VALUES ${values} ON CONFLICT(id) DO UPDATE SET category_id = excluded.category_id, name_ar = excluded.name_ar, name_en = excluded.name_en, duration_minutes = excluded.duration_minutes, price_ar = excluded.price_ar, price_en = excluded.price_en, specialty = excluded.specialty, sort_order = excluded.sort_order, updated_at = CURRENT_TIMESTAMP`,
+      ({ service, sortOrder }) => [service.id, service.categoryId, service.name.ar, service.name.en, service.durationMinutes, service.price.ar, service.price.en, service.specialty, sortOrder],
     ),
     db.prepare("INSERT INTO staff_members (id, name, role_ar, role_en, specialty, status, sort_order) VALUES ('reception', 'موظف الاستقبال', 'موظف الاستقبال', 'Reception', 'operations', 'available', 900) ON CONFLICT(id) DO UPDATE SET name = excluded.name, role_ar = excluded.role_ar, role_en = excluded.role_en, specialty = excluded.specialty, sort_order = excluded.sort_order, updated_at = CURRENT_TIMESTAMP"),
-    ...bookingStaff.flatMap((member) => {
-      const defaults = staffOperationalDefaults[member.id] ?? {
-        startMinute: BOOKING_RULES.openingMinutes,
-        endMinute: BOOKING_RULES.closingMinutes,
-      };
-      return Array.from({ length: 7 }, (_, weekday) =>
-        db.prepare("INSERT INTO staff_schedules (id, staff_id, weekday, start_minute, end_minute, active) VALUES (?, ?, ?, ?, ?, 1) ON CONFLICT(staff_id, weekday) DO NOTHING")
-          .bind(`${member.id}-${weekday}`, member.id, weekday, defaults.startMinute, defaults.endMinute),
-      );
-    }),
+    ...staffScheduleSeedStatements(db, false),
   ];
   await db.batch(statements);
 
   const operationsApplied = await db.prepare("SELECT id FROM app_migrations WHERE id = ?")
     .bind(STAFF_OPERATIONS_MIGRATION).first<{ id: string }>();
   if (!operationsApplied) {
-    const operationStatements = bookingStaff.flatMap((member) => {
-      const defaults = staffOperationalDefaults[member.id];
-      if (!defaults) return [];
-      const scheduleStatements = Array.from({ length: 7 }, (_, weekday) =>
-        db.prepare(`
-          INSERT INTO staff_schedules (id, staff_id, weekday, start_minute, end_minute, active)
-          VALUES (?, ?, ?, ?, ?, 1)
-          ON CONFLICT(staff_id, weekday) DO UPDATE SET
-            start_minute = excluded.start_minute,
-            end_minute = excluded.end_minute,
-            active = 1,
-            updated_at = CURRENT_TIMESTAMP
-        `).bind(`${member.id}-${weekday}`, member.id, weekday, defaults.startMinute, defaults.endMinute),
-      );
-      if (defaults.whatsappPhone) {
-        scheduleStatements.push(
-          db.prepare("UPDATE staff_members SET whatsapp_phone = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-            .bind(defaults.whatsappPhone, member.id),
-        );
-      }
-      return scheduleStatements;
-    });
+    const operationStatements = [
+      ...staffScheduleSeedStatements(db, true),
+      ...bookingStaff.flatMap((member) => {
+        const phone = staffOperationalDefaults[member.id]?.whatsappPhone;
+        return phone
+          ? [db.prepare("UPDATE staff_members SET whatsapp_phone = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(phone, member.id)]
+          : [];
+      }),
+    ];
     operationStatements.push(
       db.prepare("INSERT OR IGNORE INTO app_migrations (id) VALUES (?)").bind(STAFF_OPERATIONS_MIGRATION),
       db.prepare("INSERT INTO system_events (type, payload) VALUES ('staff.operations_seeded', ?)")
@@ -237,6 +269,7 @@ export async function ensureCatalogSeed() {
     );
     await db.batch(operationStatements);
   }
+  await db.prepare("INSERT OR IGNORE INTO app_migrations (id) VALUES (?)").bind(catalogSeedId).run();
   seededDate = today;
 }
 
@@ -277,6 +310,9 @@ function intervalsOverlap(startA: number, endA: number, startB: number, endB: nu
 
 function dateWithinBookingWindow(date: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const [year, month, day] = date.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day, 12));
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) return false;
   const today = ammanDateParts().date;
   const start = new Date(`${today}T00:00:00+03:00`).getTime();
   const target = new Date(`${date}T00:00:00+03:00`).getTime();
@@ -418,17 +454,64 @@ export function scheduleLockStatements(db: D1Database, bookingId: string, date: 
   });
 }
 
+export function staffTimeClaimStatements(db: D1Database, ownerType: "booking_item" | "break", rows: Array<{
+  ownerId: string;
+  staffId: string;
+  date: string;
+  minute: number;
+}>) {
+  const ownerLiteral = ownerType === "break" ? "'break'" : "'booking_item'";
+  return multiRowStatements(
+    db,
+    rows,
+    5,
+    `(?, ${ownerLiteral}, ?, ?, ?, ?)`,
+    (values) => `INSERT INTO staff_time_claims (slot_key, owner_type, owner_id, staff_id, claim_date, minute) VALUES ${values}`,
+    (row) => [`${row.staffId}:${row.date}:${row.minute}`, row.ownerId, row.staffId, row.date, row.minute],
+  );
+}
+
 function scheduleClaimStatements(db: D1Database, date: string, assignments: Array<AssignedGuest & { itemId: string }>) {
-  return assignments.flatMap((item) => {
-    const statements: D1PreparedStatement[] = [];
+  const rows = assignments.flatMap((item) => {
+    const claims: Array<{ ownerId: string; staffId: string; date: string; minute: number }> = [];
     for (let minute = item.startMinute; minute < item.endMinute + BOOKING_RULES.internalBufferMinutes; minute += 5) {
-      statements.push(
-        db.prepare("INSERT INTO staff_time_claims (slot_key, owner_type, owner_id, staff_id, claim_date, minute) VALUES (?, 'booking_item', ?, ?, ?, ?)")
-          .bind(`${item.staffId}:${date}:${minute}`, item.itemId, item.staffId, date, minute),
-      );
+      claims.push({ ownerId: item.itemId, staffId: item.staffId, date, minute });
     }
-    return statements;
+    return claims;
   });
+  return staffTimeClaimStatements(db, "booking_item", rows);
+}
+
+function bookingItemStatements(db: D1Database, bookingId: string, date: string, rows: Array<AssignedGuest & { itemId: string }>) {
+  return multiRowStatements(
+    db,
+    rows,
+    9,
+    "(?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', CURRENT_TIMESTAMP)",
+    (values) => `INSERT INTO booking_items (id, booking_id, guest_index, guest_label, service_id, staff_id, booking_date, start_minute, end_minute, status, updated_at) VALUES ${values}`,
+    (item) => [
+      item.itemId,
+      bookingId,
+      item.guestIndex,
+      item.resourceLabel ? `${item.label} · ${item.resourceLabel}` : item.label,
+      item.serviceId,
+      item.staffId,
+      date,
+      item.startMinute,
+      item.endMinute,
+    ],
+  );
+}
+
+function pushOutboxStatements(db: D1Database, bookingId: string, recipients: string[], payload: string, expiresAt: number) {
+  return multiRowStatements(
+    db,
+    recipients.map((staffId) => ({ id: crypto.randomUUID(), staffId })),
+    5,
+    "(?, ?, ?, ?, ?)",
+    (values) => `INSERT OR IGNORE INTO staff_push_outbox (id, booking_id, staff_id, payload, expires_at) VALUES ${values}`,
+    (row) => [row.id, bookingId, row.staffId, payload, expiresAt],
+  );
 }
 
 async function sha256(value: string) {
@@ -483,20 +566,72 @@ export async function createOtp(phoneValue: string, purpose: "booking" | "manage
   return { id, expiresAt, delivered: delivery.delivered, devCode: delivery.delivered ? undefined : code };
 }
 
-export async function verifyOtp(challengeId: string, code: string, purpose: "booking" | "manage") {
+export async function verifyOtp(challengeId: string, code: string, purpose: "booking" | "manage", allowRedeemed = false) {
   const db = getD1();
   const challenge = await db.prepare("SELECT id, phone, purpose, booking_id, code_hash, expires_at, attempts, verified_at FROM otp_challenges WHERE id = ?")
     .bind(challengeId).first<{ id: string; phone: string; purpose: string; booking_id: string | null; code_hash: string; expires_at: number; attempts: number; verified_at: number | null }>();
   if (!challenge || challenge.purpose !== purpose) throw new Error("OTP_NOT_FOUND");
-  if (challenge.verified_at) throw new Error("OTP_ALREADY_USED");
-  if (challenge.expires_at < Date.now()) throw new Error("OTP_EXPIRED");
-  if (challenge.attempts >= 5) throw new Error("OTP_LOCKED");
   const supplied = await sha256(`${challenge.id}:${code.replace(/\D/g, "")}`);
   if (supplied !== challenge.code_hash) {
-    await db.prepare("UPDATE otp_challenges SET attempts = attempts + 1 WHERE id = ?").bind(challenge.id).run();
+    if (!challenge.verified_at) await db.prepare("UPDATE otp_challenges SET attempts = attempts + 1 WHERE id = ?").bind(challenge.id).run();
     throw new Error("OTP_INVALID");
   }
+  if (allowRedeemed && challenge.verified_at) return challenge;
+  if (challenge.expires_at < Date.now()) throw new Error("OTP_EXPIRED");
+  if (challenge.attempts >= 5) throw new Error("OTP_LOCKED");
+  if (challenge.verified_at && !allowRedeemed) throw new Error("OTP_ALREADY_USED");
   return challenge;
+}
+
+async function existingBookingResult(db: D1Database, challengeId: string) {
+  const group = await db.prepare(`
+    SELECT bg.id, bg.booking_code, bg.first_name, bg.last_name, bg.phone, bg.locale
+    FROM otp_redemptions redemption
+    JOIN booking_groups bg ON bg.id = redemption.booking_id
+    WHERE redemption.challenge_id = ?
+  `).bind(challengeId).first<{
+    id: string;
+    booking_code: string;
+    first_name: string;
+    last_name: string;
+    phone: string;
+    locale: Locale;
+  }>();
+  if (!group) return null;
+  const items = await db.prepare("SELECT guest_index, guest_label, service_id, staff_id, booking_date, start_minute, end_minute FROM booking_items WHERE booking_id = ? ORDER BY guest_index, start_minute, id")
+    .bind(group.id).all<{
+      guest_index: number;
+      guest_label: string;
+      service_id: string;
+      staff_id: string;
+      booking_date: string;
+      start_minute: number;
+      end_minute: number;
+    }>();
+  if (!items.results.length) return null;
+  const assignments: AssignedGuest[] = items.results.map((item) => ({
+    guestIndex: item.guest_index,
+    serviceId: item.service_id,
+    staffId: item.staff_id,
+    startMinute: item.start_minute,
+    endMinute: item.end_minute,
+    label: item.guest_label,
+  }));
+  const summary = bookingSummaryText({
+    bookingCode: group.booking_code,
+    firstName: group.first_name,
+    lastName: group.last_name,
+    phone: group.phone,
+    date: items.results[0].booking_date,
+    assignments,
+    locale: group.locale === "en" ? "en" : "ar",
+  });
+  return {
+    bookingId: group.id,
+    bookingCode: group.booking_code,
+    assignments,
+    salonWhatsAppUrl: `https://wa.me/${SALON_WHATSAPP}?text=${encodeURIComponent(summary)}`,
+  };
 }
 
 export async function createBooking(input: {
@@ -515,62 +650,60 @@ export async function createBooking(input: {
   const fullName = `${firstName} ${lastName}`.replace(/\s+/g, " ").trim().slice(0, 160);
   if (!firstName || !lastName || fullName.split(/\s+/).filter(Boolean).length < 4) throw new Error("NAME_REQUIRED");
   if (!input.guests.length || input.guests.length > 6) throw new Error("GUESTS_REQUIRED");
-  const challenge = await verifyOtp(input.challengeId, input.code, "booking");
+  const challenge = await verifyOtp(input.challengeId, input.code, "booking", true);
   const phone = normalizePhone(input.phone);
   if (phone !== challenge.phone) throw new Error("PHONE_MISMATCH");
+  const db = getD1();
+  const priorBooking = await existingBookingResult(db, challenge.id);
+  if (priorBooking) return priorBooking;
+  if (challenge.verified_at) throw new Error("OTP_ALREADY_USED");
   const assignments = await assignAtStart(input.date, input.startMinute, input.guests);
   if (!assignments) throw new Error("SLOT_UNAVAILABLE");
 
-  const db = getD1();
   const id = crypto.randomUUID();
   const manageToken = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
   const compactDate = input.date.replaceAll("-", "").slice(2);
   const bookingCodeRandom = new Uint32Array(1);
   crypto.getRandomValues(bookingCodeRandom);
-  const bookingCode = `MJ-${compactDate}-${String(100000 + (bookingCodeRandom[0] % 900000))}`;
+  const bookingCode = `MJ-${compactDate}-${String(100_000_000 + (bookingCodeRandom[0] % 900_000_000))}`;
   const staffIds = [...new Set(assignments.map((item) => item.staffId))];
-  const pushRecipients = [...new Set(["mustafa", "reception", ...staffIds])];
-  const appointmentSummary = assignments.map((item) => {
-    const service = getService(item.serviceId)?.name.ar ?? item.serviceId;
-    const hour = `${String(Math.floor(item.startMinute / 60)).padStart(2, "0")}:${String(item.startMinute % 60).padStart(2, "0")}`;
-    return `${service} · ${hour}`;
-  }).join("، ").slice(0, 220);
+  const pushRecipients = [...new Set([staffIds[0], "mustafa", ...staffIds.slice(1), "reception"].filter(Boolean))];
   const pushPayload = JSON.stringify({
     title: "حجز جديد · MJ",
-    body: `${fullName} · ${input.date}\n${appointmentSummary}`,
+    body: "لديك حجز جديد. افتح تطبيق MJ لعرض التفاصيل.",
     tag: `booking-${bookingCode}`,
-    url: "/staff?tab=upcoming",
+    url: "/staff?app=1&tab=upcoming",
     bookingId: id,
   });
   const pushExpiresAt = Date.now() + 24 * 60 * 60_000;
   const assignmentRows = assignments.map((item) => ({ ...item, itemId: crypto.randomUUID() }));
+  const summary = bookingSummaryText({ bookingCode, firstName, lastName, phone, date: input.date, assignments, locale: input.locale });
+  const staffPlaceholders = staffIds.map(() => "?").join(",");
+  const staffPhones = staffIds.length
+    ? await db.prepare(`SELECT whatsapp_phone FROM staff_members WHERE id IN (${staffPlaceholders}) AND whatsapp_phone IS NOT NULL AND whatsapp_phone <> ''`).bind(...staffIds).all<{ whatsapp_phone: string }>()
+    : { results: [] as Array<{ whatsapp_phone: string }> };
   const statements = [
     db.prepare("UPDATE otp_challenges SET verified_at = ? WHERE id = ? AND verified_at IS NULL").bind(Date.now(), challenge.id),
     db.prepare("INSERT INTO otp_redemptions (challenge_id, booking_id) VALUES (?, ?)").bind(challenge.id, id),
     db.prepare("INSERT INTO booking_groups (id, booking_code, first_name, last_name, full_name, phone, locale, status, manage_token) VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)")
       .bind(id, bookingCode, firstName, lastName, fullName, phone, input.locale, manageToken),
-    ...assignmentRows.map((item) =>
-      db.prepare("INSERT INTO booking_items (id, booking_id, guest_index, guest_label, service_id, staff_id, booking_date, start_minute, end_minute, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', CURRENT_TIMESTAMP)")
-        .bind(item.itemId, id, item.guestIndex, item.resourceLabel ? `${item.label} · ${item.resourceLabel}` : item.label, item.serviceId, item.staffId, input.date, item.startMinute, item.endMinute),
-    ),
+    ...bookingItemStatements(db, id, input.date, assignmentRows),
     ...scheduleClaimStatements(db, input.date, assignmentRows),
-    ...pushRecipients.map((staffId) => db.prepare("INSERT OR IGNORE INTO staff_push_outbox (id, booking_id, staff_id, payload, expires_at) VALUES (?, ?, ?, ?, ?)")
-      .bind(crypto.randomUUID(), id, staffId, pushPayload, pushExpiresAt)),
+    ...pushOutboxStatements(db, id, pushRecipients, pushPayload, pushExpiresAt),
     db.prepare("INSERT INTO system_events (type, payload) VALUES ('booking.created', ?)").bind(JSON.stringify({ bookingId: id, staffIds: assignments.map((item) => item.staffId), date: input.date })),
   ];
   try {
     await db.batch(statements);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    if (message.includes("otp_redemptions")) throw new Error("OTP_ALREADY_USED");
+    if (message.includes("otp_redemptions")) {
+      const existing = await existingBookingResult(db, challenge.id);
+      if (existing) return existing;
+      throw new Error("OTP_ALREADY_USED");
+    }
     if (message.includes("staff_time_claims") || message.includes("UNIQUE constraint")) throw new Error("SLOT_UNAVAILABLE");
     throw error;
   }
-  const summary = bookingSummaryText({ bookingCode, firstName, lastName, phone, date: input.date, assignments, locale: input.locale });
-  const staffPlaceholders = staffIds.map(() => "?").join(",");
-  const staffPhones = staffIds.length
-    ? await db.prepare(`SELECT whatsapp_phone FROM staff_members WHERE id IN (${staffPlaceholders}) AND whatsapp_phone IS NOT NULL AND whatsapp_phone <> ''`).bind(...staffIds).all<{ whatsapp_phone: string }>()
-    : { results: [] as Array<{ whatsapp_phone: string }> };
   waitUntil(Promise.allSettled([
     sendBookingNotifications({
       phone,
@@ -578,7 +711,14 @@ export async function createBooking(input: {
       staffPhones: staffPhones.results.map((row) => normalizePhone(row.whatsapp_phone)),
       summary,
     }),
-    deliverStaffPushOutboxWithRetry(id),
+    drainStaffPushOutbox({
+      bookingId: id,
+      staffPriority: pushRecipients,
+      outboxLimit: PUSH_FAST_OUTBOX_BATCH_SIZE,
+      subscriptionLimit: PUSH_FAST_SUBSCRIPTIONS_PER_PASS,
+      cleanup: false,
+      finalize: false,
+    }),
   ]));
   return {
     bookingId: id,
@@ -610,8 +750,9 @@ async function sendAuthenticationTemplate(phone: string, code: string) {
   const phoneNumberId = runtime.WHATSAPP_PHONE_NUMBER_ID;
   const template = runtime.WHATSAPP_AUTH_TEMPLATE;
   if (!token || !phoneNumberId || !template) return { configured: false, delivered: false };
+  const graphVersion = /^v\d+\.\d+$/.test(runtime.WHATSAPP_GRAPH_VERSION ?? "") ? runtime.WHATSAPP_GRAPH_VERSION : "v22.0";
   try {
-    const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
+    const response = await fetch(`https://graph.facebook.com/${graphVersion}/${phoneNumberId}/messages`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -624,6 +765,7 @@ async function sendAuthenticationTemplate(phone: string, code: string) {
           components: [{ type: "body", parameters: [{ type: "text", text: code }] }, { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: code }] }],
         },
       }),
+      signal: AbortSignal.timeout(8_000),
     });
     return { configured: true, delivered: response.ok };
   } catch {
@@ -636,7 +778,8 @@ async function sendTemplate(phone: string, templateName: string | undefined, sum
   const token = runtime.WHATSAPP_ACCESS_TOKEN;
   const phoneNumberId = runtime.WHATSAPP_PHONE_NUMBER_ID;
   if (!token || !phoneNumberId || !templateName) return false;
-  const response = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/messages`, {
+  const graphVersion = /^v\d+\.\d+$/.test(runtime.WHATSAPP_GRAPH_VERSION ?? "") ? runtime.WHATSAPP_GRAPH_VERSION : "v22.0";
+  const response = await fetch(`https://graph.facebook.com/${graphVersion}/${phoneNumberId}/messages`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -645,6 +788,7 @@ async function sendTemplate(phone: string, templateName: string | undefined, sum
       type: "template",
       template: { name: templateName, language: { code: "ar" }, components: [{ type: "body", parameters: [{ type: "text", text: summary.slice(0, 950) }] }] },
     }),
+    signal: AbortSignal.timeout(8_000),
   });
   return response.ok;
 }
@@ -660,15 +804,17 @@ async function sendBookingNotifications(input: { phone: string; ownerPhone: stri
 
 export function apiError(error: unknown) {
   const message = error instanceof Error ? error.message : "UNKNOWN_ERROR";
-  const status = ["INVALID_PHONE", "NAME_REQUIRED", "GUESTS_REQUIRED", "INVALID_USERNAME", "WEAK_PASSWORD", "USERNAME_TAKEN", "STAFF_NOT_FOUND", "INVALID_PUSH_SUBSCRIPTION", "PUSH_ENDPOINT_REQUIRED"].includes(message) ? 400
-    : ["OTP_INVALID", "OTP_EXPIRED", "OTP_LOCKED", "OTP_ALREADY_USED"].includes(message) ? 401
+  const status = ["INVALID_PHONE", "NAME_REQUIRED", "GUESTS_REQUIRED", "INVALID_USERNAME", "WEAK_PASSWORD", "USERNAME_TAKEN", "STAFF_NOT_FOUND", "INVALID_PUSH_SUBSCRIPTION", "PUSH_ENDPOINT_REQUIRED", "NEW_PASSWORD_REQUIRED"].includes(message) ? 400
+    : ["OTP_INVALID", "OTP_EXPIRED", "OTP_LOCKED", "OTP_ALREADY_USED", "OTP_NOT_FOUND", "PHONE_MISMATCH", "CURRENT_PASSWORD_INVALID"].includes(message) ? 401
       : ["OTP_RATE_LIMITED", "PUBLIC_RATE_LIMITED"].includes(message) ? 429
-        : ["WHATSAPP_NOT_CONFIGURED", "WHATSAPP_DELIVERY_FAILED"].includes(message) ? 503
+        : ["WHATSAPP_NOT_CONFIGURED", "WHATSAPP_DELIVERY_FAILED", "BOOKING_DB_UNAVAILABLE", "BOOKING_SCHEMA_NOT_MIGRATED"].includes(message) ? 503
       : ["STAFF_UNAUTHORIZED", "STAFF_BAD_ORIGIN", "STAFF_CREDENTIAL_CHANGE_REQUIRED"].includes(message) ? 403
       : message === "PASSKEY_NOT_REGISTERED" ? 404
       : ["PASSKEY_CHALLENGE_EXPIRED", "PASSKEY_VERIFICATION_FAILED"].includes(message) ? 401
-      : message === "PASSKEY_ALREADY_REGISTERED" ? 409
-      : ["SLOT_UNAVAILABLE"].includes(message) ? 409
+      : ["PASSKEY_ALREADY_REGISTERED", "PASSWORD_UNCHANGED", "SLOT_UNAVAILABLE"].includes(message) ? 409
         : message === "BOOKING_NOT_FOUND" ? 404 : 500;
-  return Response.json({ error: message }, { status });
+  const exposed = status < 500 || ["WHATSAPP_NOT_CONFIGURED", "WHATSAPP_DELIVERY_FAILED", "BOOKING_DB_UNAVAILABLE", "BOOKING_SCHEMA_NOT_MIGRATED"].includes(message)
+    ? message
+    : "INTERNAL_ERROR";
+  return Response.json({ error: exposed }, { status });
 }

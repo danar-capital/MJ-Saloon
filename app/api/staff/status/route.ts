@@ -26,8 +26,10 @@ export async function POST(request: Request) {
       if (weeklyOffDay !== null && (typeof weeklyOffDay !== "number" || !Number.isInteger(weeklyOffDay) || weeklyOffDay < 0 || weeklyOffDay > 6)) {
         return Response.json({ error: "INVALID_WEEKLY_OFF_DAY" }, { status: 400 });
       }
-      await db.prepare("UPDATE staff_members SET weekly_off_day = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-        .bind(weeklyOffDay, payload.id).run();
+      await db.batch([
+        db.prepare("UPDATE staff_members SET weekly_off_day = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(weeklyOffDay, payload.id),
+        db.prepare("INSERT INTO system_events (type, actor_id, payload) VALUES ('staff.weekly_off_changed', ?, ?)").bind(viewer.accountId, JSON.stringify({ staffId: payload.id })),
+      ]);
       return Response.json({ ok: true });
     }
     const allowedStatuses = payload.target === "staff"
@@ -40,11 +42,15 @@ export async function POST(request: Request) {
     const statusDate = payload.status === "off_today" || payload.status === "break" ? ammanDateParts().date : null;
     if (payload.target === "staff") {
       const statusStartedAt = payload.status === "break" ? new Date().toISOString() : null;
-      await db.prepare("UPDATE staff_members SET status = ?, status_date = ?, status_started_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-        .bind(payload.status, statusDate, statusStartedAt, payload.id).run();
+      await db.batch([
+        db.prepare("UPDATE staff_members SET status = ?, status_date = ?, status_started_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(payload.status, statusDate, statusStartedAt, payload.id),
+        db.prepare("INSERT INTO system_events (type, actor_id, payload) VALUES ('staff.status_changed', ?, ?)").bind(viewer.accountId, JSON.stringify({ staffId: payload.id, status: payload.status })),
+      ]);
     } else {
-      await db.prepare(`UPDATE ${table} SET status = ?, status_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-        .bind(payload.status, statusDate, payload.id).run();
+      await db.batch([
+        db.prepare(`UPDATE ${table} SET status = ?, status_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(payload.status, statusDate, payload.id),
+        db.prepare("INSERT INTO system_events (type, actor_id, payload) VALUES ('service.status_changed', ?, ?)").bind(viewer.accountId, JSON.stringify({ serviceId: payload.id, status: payload.status })),
+      ]);
     }
     return Response.json({ ok: true });
   } catch (error) {

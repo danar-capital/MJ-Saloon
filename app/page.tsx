@@ -180,12 +180,29 @@ const ui = {
   },
 };
 
+function webGlAvailable() {
+  try {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("webgl2") || canvas.getContext("webgl");
+    if (!context) return false;
+    context.getExtension("WEBGL_lose_context")?.loseContext();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function shouldUseWebGlEffects() {
+  return !window.matchMedia("(prefers-reduced-motion: reduce), (max-width: 720px), (pointer: coarse)").matches
+    && webGlAvailable();
+}
+
 function LuxuryBackground() {
   const mountRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const mount = mountRef.current;
-    if (!mount || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!mount || !shouldUseWebGlEffects()) return;
 
     let cleanup: (() => void) | undefined;
     let cancelled = false;
@@ -402,7 +419,7 @@ function LuxuryBackground() {
       renderer.dispose();
       renderer.domElement.remove();
     };
-      });
+      }).catch(() => undefined);
     };
 
     const firstAmbientSection = document.querySelector(".dark-3d");
@@ -430,7 +447,7 @@ function ScissorScene() {
 
   useEffect(() => {
     const mount = mountRef.current;
-    if (!mount || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!mount || !shouldUseWebGlEffects()) return;
 
     let cleanup: (() => void) | undefined;
     let cancelled = false;
@@ -443,20 +460,21 @@ function ScissorScene() {
       void import("three").then((THREE) => {
         if (cancelled) return;
 
+    const mobileQuality = window.innerWidth < 720;
     let renderer: WebGLRenderer;
     try {
-      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: "high-performance" });
+      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: !mobileQuality, powerPreference: "high-performance" });
     } catch {
       return;
     }
 
-    const qualityRatio = () => Math.min(window.devicePixelRatio, window.innerWidth < 720 ? 1.4 : 1.75);
+    const qualityRatio = () => Math.min(window.devicePixelRatio, window.innerWidth < 720 ? 1.1 : 1.6);
     renderer.setPixelRatio(qualityRatio());
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.12;
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.enabled = !mobileQuality;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     mount.appendChild(renderer.domElement);
 
@@ -634,7 +652,7 @@ function ScissorScene() {
     scene.add(new THREE.HemisphereLight(0xf7fbff, 0x07131c, 2.8));
     const key = new THREE.DirectionalLight(0xffffff, 6.4);
     key.position.set(4.5, 4, 6);
-    key.castShadow = true;
+    key.castShadow = !mobileQuality;
     scene.add(key);
     const rim = new THREE.PointLight(0xc62027, 38, 20);
     rim.position.set(-4, -2, 3);
@@ -757,17 +775,28 @@ function ScissorScene() {
       window.removeEventListener("resize", onResize);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       sectionObserver.disconnect();
-      bladeGeometry.dispose();
-      edgeGeometry.dispose();
-      engravingGeometry.dispose();
+      const disposedGeometries = new Set<BufferGeometry>();
+      const disposedMaterials = new Set<Material>();
+      scene.traverse((object) => {
+        const mesh = object as Mesh;
+        if (mesh.geometry && !disposedGeometries.has(mesh.geometry)) {
+          disposedGeometries.add(mesh.geometry);
+          mesh.geometry.dispose();
+        }
+        const meshMaterials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+        meshMaterials.forEach((material) => {
+          if (disposedMaterials.has(material)) return;
+          disposedMaterials.add(material);
+          material.dispose();
+        });
+      });
       environmentTexture.dispose();
       badgeTexture.dispose();
       engravingTexture.dispose();
-      engravingMaterial.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     };
-      });
+      }).catch(() => undefined);
     };
 
     const cutSection = document.getElementById("cut");
@@ -909,6 +938,7 @@ export default function Home() {
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 720px)");
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const video = heroVideoRef.current;
     if (!video) return;
     let disposed = false;
@@ -925,7 +955,7 @@ export default function Home() {
       video.muted = true;
       video.defaultMuted = true;
       video.playsInline = true;
-      if (!heroVisible || document.hidden || bookingOpen) {
+      if (!heroVisible || document.hidden || bookingOpen || reducedMotion.matches) {
         video.pause();
         return;
       }
@@ -974,7 +1004,11 @@ export default function Home() {
 
   useEffect(() => {
     const videos = Array.from(document.querySelectorAll<HTMLVideoElement>(".cinema-video"));
-    const visibleVideos = new Set<HTMLVideoElement>();
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      videos.forEach((video) => video.pause());
+      return;
+    }
+    const visibility = new Map<HTMLVideoElement, number>();
     const setPlayback = (video: HTMLVideoElement, playing: boolean) => {
       if (!playing || document.hidden) {
         video.pause();
@@ -988,20 +1022,16 @@ export default function Home() {
     const observer = new IntersectionObserver((entries) => {
       entries.forEach((entry) => {
         const video = entry.target as HTMLVideoElement;
-        if (entry.isIntersecting) {
-          visibleVideos.add(video);
-          setPlayback(video, true);
-        } else {
-          visibleVideos.delete(video);
-          setPlayback(video, false);
-        }
+        visibility.set(video, entry.isIntersecting ? entry.intersectionRatio : 0);
       });
-      document.querySelector(".finale-stage")?.classList.toggle("is-playing", visibleVideos.size > 0);
+      const activeVideo = [...visibility.entries()].sort((left, right) => right[1] - left[1])[0];
+      videos.forEach((video) => setPlayback(video, Boolean(activeVideo && activeVideo[0] === video && activeVideo[1] > 0)));
+      document.querySelector(".finale-stage")?.classList.toggle("is-playing", Boolean(activeVideo && activeVideo[1] > 0));
     }, { threshold: 0.16, rootMargin: "12% 0px" });
     videos.forEach((video) => observer.observe(video));
     const syncVisiblePlayback = () => {
-      visibleVideos.forEach((video) => setPlayback(video, !document.hidden));
-      if (document.hidden) videos.forEach((video) => video.pause());
+      const activeVideo = [...visibility.entries()].sort((left, right) => right[1] - left[1])[0];
+      videos.forEach((video) => setPlayback(video, Boolean(!document.hidden && activeVideo && activeVideo[0] === video && activeVideo[1] > 0)));
     };
     document.addEventListener("visibilitychange", syncVisiblePlayback);
     window.addEventListener("pageshow", syncVisiblePlayback);

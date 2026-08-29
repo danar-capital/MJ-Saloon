@@ -70,6 +70,8 @@ export const bookingItems = sqliteTable("booking_items", {
   index("booking_items_schedule_idx").on(table.staffId, table.bookingDate, table.startMinute, table.endMinute),
   index("booking_items_booking_idx").on(table.bookingId),
   index("booking_items_staff_booking_idx").on(table.staffId, table.bookingId),
+  index("booking_items_date_idx").on(table.bookingDate, table.startMinute, table.bookingId),
+  index("booking_items_staff_date_idx").on(table.staffId, table.bookingDate, table.startMinute, table.bookingId),
 ]);
 
 export const scheduleLocks = sqliteTable("schedule_locks", {

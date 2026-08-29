@@ -1,4 +1,5 @@
-import { apiError, getD1 } from "@/lib/booking-server";
+import { ammanDateParts, apiError, getD1 } from "@/lib/booking-server";
+import { bookingStatusTimingAllowed, type OperationalBookingStatus } from "@/lib/booking-status";
 import { assertSameOrigin, requireStaffSession } from "@/lib/staff-auth";
 
 export const dynamic = "force-dynamic";
@@ -16,10 +17,18 @@ export async function POST(request: Request) {
     const payload = await request.json() as { itemId?: string; status?: string };
     if (!payload.itemId || !payload.status) return Response.json({ error: "BOOKING_STATUS_REQUIRED" }, { status: 400 });
     const db = getD1();
-    const item = await db.prepare("SELECT id, booking_id, staff_id, status FROM booking_items WHERE id = ?")
-      .bind(payload.itemId).first<{ id: string; booking_id: string; staff_id: string; status: string }>();
+    const item = await db.prepare("SELECT id, booking_id, staff_id, status, booking_date, start_minute, end_minute FROM booking_items WHERE id = ?")
+      .bind(payload.itemId).first<{ id: string; booking_id: string; staff_id: string; status: string; booking_date: string; start_minute: number; end_minute: number }>();
     if (!item || (!viewer.canViewAllBookings && item.staff_id !== viewer.staffId)) return Response.json({ error: "STAFF_UNAUTHORIZED" }, { status: 403 });
     if (!transitions[item.status]?.includes(payload.status)) return Response.json({ error: "INVALID_BOOKING_STATUS_TRANSITION" }, { status: 409 });
+    const now = ammanDateParts();
+    if (!bookingStatusTimingAllowed(payload.status as OperationalBookingStatus, {
+      bookingDate: item.booking_date,
+      startMinute: item.start_minute,
+      endMinute: item.end_minute,
+    }, now)) {
+      return Response.json({ error: "BOOKING_STATUS_TOO_EARLY" }, { status: 409 });
+    }
     const transitionStatements: D1PreparedStatement[] = [
       db.prepare("UPDATE booking_items SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ? RETURNING id")
         .bind(payload.status, item.id, item.status),

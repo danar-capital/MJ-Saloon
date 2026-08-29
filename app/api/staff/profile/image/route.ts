@@ -10,10 +10,10 @@ const allowedTypes = new Map([
   ["image/webp", "webp"],
 ]);
 
-async function authorizedTarget(request: Request, requestedId: string | null) {
+async function authorizedTarget(request: Request, requestedId: string | null, write = false) {
   const viewer = await requireStaffSession(request);
   const staffId = requestedId?.trim() || viewer.staffId;
-  if (!viewer.isOwner && staffId !== viewer.staffId) throw new Error("STAFF_UNAUTHORIZED");
+  if (write ? (!viewer.isOwner && staffId !== viewer.staffId) : (!viewer.canViewAllBookings && staffId !== viewer.staffId)) throw new Error("STAFF_UNAUTHORIZED");
   return { viewer, staffId };
 }
 
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const form = await request.formData();
     const requestedId = typeof form.get("staffId") === "string" ? String(form.get("staffId")) : null;
-    const { staffId } = await authorizedTarget(request, requestedId);
+    const { viewer, staffId } = await authorizedTarget(request, requestedId, true);
     const file = form.get("image");
     if (!(file instanceof File)) return Response.json({ error: "PROFILE_IMAGE_REQUIRED" }, { status: 400 });
     const extension = allowedTypes.get(file.type);
@@ -59,8 +59,10 @@ export async function POST(request: Request) {
     const key = `staff-profiles/${staffId}/${crypto.randomUUID()}.${extension}`;
     await env.BUCKET.put(key, bytes, { httpMetadata: { contentType: file.type } });
     const version = new Date().toISOString();
-    await db.prepare("UPDATE staff_members SET profile_image_key = ?, profile_image_updated_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-      .bind(key, version, staffId).run();
+    await db.batch([
+      db.prepare("UPDATE staff_members SET profile_image_key = ?, profile_image_updated_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(key, version, staffId),
+      db.prepare("INSERT INTO system_events (type, actor_id, payload) VALUES ('staff.profile_image_changed', ?, ?)").bind(viewer.accountId, JSON.stringify({ staffId })),
+    ]);
     if (current.profile_image_key && current.profile_image_key !== key) await env.BUCKET.delete(current.profile_image_key).catch(() => undefined);
     return Response.json({ image: { staffId, version } }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

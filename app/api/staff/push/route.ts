@@ -1,9 +1,9 @@
-import { waitUntil } from "cloudflare:workers";
 import { apiError, getD1 } from "@/lib/booking-server";
-import { drainStaffPushOutbox, pushConfigured, pushPublicKey } from "@/lib/push-server";
+import { pushConfigured, pushPublicKey } from "@/lib/push-server";
 import { assertSameOrigin, requireStaffSession } from "@/lib/staff-auth";
 
 export const dynamic = "force-dynamic";
+const PUSH_SUBSCRIPTION_LIFETIME_MS = 180 * 24 * 60 * 60_000;
 
 type SubscriptionPayload = {
   endpoint?: string;
@@ -93,12 +93,11 @@ export async function POST(request: Request) {
       subscription.keys!.p256dh,
       subscription.keys!.auth,
       (request.headers.get("user-agent") ?? "").slice(0, 300),
-      viewer.sessionExpiresAt,
+      Math.min(Date.now() + PUSH_SUBSCRIPTION_LIFETIME_MS, viewer.sessionExpiresAt),
       ),
       db.prepare("DELETE FROM staff_push_subscriptions WHERE account_id = ? AND id NOT IN (SELECT id FROM staff_push_subscriptions WHERE account_id = ? ORDER BY updated_at DESC LIMIT 5)")
         .bind(viewer.accountId, viewer.accountId),
     ]);
-    waitUntil(drainStaffPushOutbox(viewer.staffId));
     return Response.json({ enabled: true }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     return apiError(error);

@@ -15,9 +15,12 @@ export async function PATCH(request: Request) {
     const phone = normalizePhone(payload.whatsappPhone ?? "");
     if (!validPhone(phone)) return Response.json({ error: "INVALID_PHONE" }, { status: 400 });
     await ensureCatalogSeed();
-    const result = await getD1().prepare("UPDATE staff_members SET profile_name = ?, whatsapp_phone = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    const db = getD1();
+    const result = await db.prepare("UPDATE staff_members SET profile_name = ?, whatsapp_phone = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
       .bind(name, phone, staffId).run();
     if (!result.meta.changes) return Response.json({ error: "STAFF_NOT_FOUND" }, { status: 404 });
+    await db.prepare("INSERT INTO system_events (type, actor_id, payload) VALUES ('staff.profile_changed', ?, ?)")
+      .bind(viewer.accountId, JSON.stringify({ staffId })).run();
     return Response.json({ profile: { staffId, name, whatsappPhone: phone } }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return apiError(error);

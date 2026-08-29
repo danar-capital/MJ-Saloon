@@ -26,3 +26,10 @@ timeout \
   "${vinext}" build
 
 bash "${script_dir}/validate-artifact.sh"
+
+echo "Running production verification tests..."
+node \
+  --no-warnings \
+  --experimental-strip-types \
+  --experimental-loader "${SITES_PROJECT_ROOT}/scripts/cloudflare-workers-loader.mjs" \
+  --test "${SITES_PROJECT_ROOT}"/tests/*.test.mjs

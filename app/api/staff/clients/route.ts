@@ -24,22 +24,26 @@ export async function GET(request: Request) {
     const search = `%${query}%`;
     const scopeClause = staffId ? "AND bi.staff_id = ?" : "";
     const sql = `
-      WITH scoped AS (
+      WITH base AS (
         SELECT DISTINCT
           bg.id AS booking_id,
           COALESCE(NULLIF(bg.full_name, ''), TRIM(bg.first_name || ' ' || bg.last_name)) AS full_name,
           bg.phone,
           bi.staff_id,
-          bi.booking_date
+          bi.booking_date,
+          bg.created_at
         FROM booking_groups bg
         JOIN booking_items bi ON bi.booking_id = bg.id
         WHERE bg.status NOT IN ('cancelled', 'no_show')
           AND bi.status <> 'cancelled'
           ${scopeClause}
+      ), scoped AS (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY phone ORDER BY created_at DESC, booking_id DESC) AS name_rank
+        FROM base
       )
       SELECT
         phone,
-        MAX(full_name) AS full_name,
+        MAX(CASE WHEN name_rank = 1 THEN full_name END) AS full_name,
         COUNT(DISTINCT booking_id) AS booking_count,
         MIN(booking_date) AS first_booking_date,
         MAX(booking_date) AS last_booking_date,

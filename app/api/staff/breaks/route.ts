@@ -1,5 +1,5 @@
 import { BOOKING_RULES } from "@/lib/booking-config";
-import { apiError, ensureCatalogSeed, getD1 } from "@/lib/booking-server";
+import { apiError, ensureCatalogSeed, getD1, staffTimeClaimStatements } from "@/lib/booking-server";
 import { assertSameOrigin, requireStaffSession } from "@/lib/staff-auth";
 
 export const dynamic = "force-dynamic";
@@ -27,16 +27,16 @@ export async function POST(request: Request) {
       .bind(staffId, payload.date, end, start).first();
     if (overlap) return Response.json({ error: "BREAK_OVERLAP" }, { status: 409 });
     const id = crypto.randomUUID();
-    const claims: D1PreparedStatement[] = [];
+    const claims: Array<{ ownerId: string; staffId: string; date: string; minute: number }> = [];
     for (let minute = start; minute < end + BOOKING_RULES.internalBufferMinutes; minute += 5) {
-      claims.push(db.prepare("INSERT INTO staff_time_claims (slot_key, owner_type, owner_id, staff_id, claim_date, minute) VALUES (?, 'break', ?, ?, ?, ?)")
-        .bind(`${staffId}:${payload.date}:${minute}`, id, staffId, payload.date, minute));
+      claims.push({ ownerId: id, staffId, date: payload.date, minute });
     }
     try {
       await db.batch([
         db.prepare("INSERT INTO staff_breaks (id, staff_id, break_date, start_minute, end_minute, note, status, created_by) VALUES (?, ?, ?, ?, ?, ?, 'active', ?)")
           .bind(id, staffId, payload.date, start, end, payload.note?.trim().slice(0, 120) || null, viewer.accountId),
-        ...claims,
+        ...staffTimeClaimStatements(db, "break", claims),
+        db.prepare("INSERT INTO system_events (type, actor_id, payload) VALUES ('staff.break_created', ?, ?)").bind(viewer.accountId, JSON.stringify({ breakId: id, staffId, date: payload.date })),
       ]);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
@@ -61,6 +61,7 @@ export async function DELETE(request: Request) {
     await db.batch([
       db.prepare("UPDATE staff_breaks SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(entry.id),
       db.prepare("DELETE FROM staff_time_claims WHERE owner_type = 'break' AND owner_id = ?").bind(entry.id),
+      db.prepare("INSERT INTO system_events (type, actor_id, payload) VALUES ('staff.break_cancelled', ?, ?)").bind(viewer.accountId, JSON.stringify({ breakId: entry.id, staffId: entry.staff_id })),
     ]);
     return Response.json({ ok: true });
   } catch (error) {

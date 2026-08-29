@@ -1,5 +1,5 @@
 import { generateAuthenticationOptions } from "@simplewebauthn/server";
-import { apiError, ensureCatalogSeed, getD1 } from "@/lib/booking-server";
+import { apiError, assertPublicRateLimit, ensureCatalogSeed, getD1 } from "@/lib/booking-server";
 import { accountPasskeys, parseTransports, passkeyContext, savePasskeyChallenge } from "@/lib/passkey-server";
 import { assertSameOrigin, normalizeStaffUsername } from "@/lib/staff-auth";
 
@@ -9,8 +9,11 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const payload = await request.json() as { username?: string };
+    if ((payload.username ?? "").length > 64) return Response.json({ error: "PASSKEY_NOT_REGISTERED" }, { status: 404 });
     const username = normalizeStaffUsername(payload.username ?? "");
     if (!username) return Response.json({ error: "USERNAME_REQUIRED" }, { status: 400 });
+    await assertPublicRateLimit(request, "passkey-auth-options", "all-users", 30, 10 * 60_000);
+    await assertPublicRateLimit(request, "passkey-auth-options-user", username, 8, 10 * 60_000);
     await ensureCatalogSeed();
     const account = await getD1().prepare("SELECT id FROM staff_accounts WHERE username = ? AND active = 1")
       .bind(username).first<{ id: string }>();

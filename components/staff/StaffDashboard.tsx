@@ -31,6 +31,7 @@ import {
   UserRound,
   UsersRound,
 } from "lucide-react";
+import { shiftIsoDate } from "@/lib/date-utils";
 import { getService, getStaff, minutesToTime } from "@/lib/booking-config";
 import StaffCredentials from "@/components/staff/StaffCredentials";
 import type { StaffViewer } from "@/lib/staff-auth";
@@ -93,6 +94,8 @@ type Dashboard = {
   bookings: BookingRow[];
   items: ItemRow[];
   schedules: ScheduleRow[];
+  syncVersion?: number;
+  upcomingHasMore?: boolean;
 };
 type AccountRow = {
   staff_id: string;
@@ -123,6 +126,9 @@ const navItems: Array<{ id: Tab; label: string; icon: typeof Grid2X2 }> = [
 ];
 
 const weekdayNames = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+const UPCOMING_PAGE_SIZE = 50;
+const MAX_UPCOMING_ITEMS = 200;
+const FULL_LOAD_RETRY_BACKOFF_MS = 15_000;
 
 type PushState = "checking" | "enabled" | "prompt" | "denied" | "unsupported" | "unconfigured" | "personal_device_required";
 
@@ -131,6 +137,14 @@ function urlBase64ToUint8Array(value: string) {
   const base64 = (value + padding).replaceAll("-", "+").replaceAll("_", "/");
   const decoded = window.atob(base64);
   return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+}
+
+function subscriptionUsesKey(subscription: PushSubscription, publicKey: string) {
+  const current = subscription.options.applicationServerKey;
+  if (!current) return false;
+  const left = new Uint8Array(current);
+  const right = urlBase64ToUint8Array(publicKey);
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function ammanToday() {
@@ -151,12 +165,6 @@ function ammanNowMinutes() {
   }).format(new Date());
   const [hour, minute] = value.split(":").map(Number);
   return hour * 60 + minute;
-}
-
-function shiftDate(date: string, days: number) {
-  const value = new Date(`${date}T00:00:00+03:00`);
-  value.setDate(value.getDate() + days);
-  return value.toISOString().slice(0, 10);
 }
 
 function displayDate(date: string, compact = false) {
@@ -180,6 +188,10 @@ function memberImage(staffId: string, imageVersion?: string | null) {
   return imageVersion
     ? `/api/staff/profile/image?staffId=${encodeURIComponent(staffId)}&v=${encodeURIComponent(imageVersion)}`
     : getStaff(staffId)?.image;
+}
+
+function rejectedStaffSession(response: Response, error?: string) {
+  return response.status === 401 || error === "STAFF_UNAUTHORIZED" || error === "STAFF_CREDENTIAL_CHANGE_REQUIRED";
 }
 
 async function cropProfileImage(file: File) {
@@ -222,9 +234,11 @@ export default function StaffDashboard({
   const [data, setData] = useState<Dashboard>({ staff: [], services: [], bookings: [], items: [], schedules: [] });
   const [tab, setTab] = useState<Tab>("schedule");
   const [date, setDate] = useState(ammanToday());
+  const [upcomingLimit, setUpcomingLimit] = useState(UPCOMING_PAGE_SIZE);
   const [selectedStaff, setSelectedStaff] = useState(viewer.canViewAllBookings ? "all" : viewer.staffId);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(true);
+  const [dashboardRefreshing, setDashboardRefreshing] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -241,19 +255,64 @@ export default function StaffDashboard({
   const [vapidPublicKey, setVapidPublicKey] = useState("");
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileInitialized = useRef(false);
+  const dashboardAbortRef = useRef<AbortController | null>(null);
+  const syncAbortRef = useRef<AbortController | null>(null);
+  const clientsAbortRef = useRef<AbortController | null>(null);
+  const initialDashboardLoadRef = useRef(true);
+  const syncVersionRef = useRef(0);
+  const lastFullLoadAtRef = useRef(0);
+  const fullLoadRetryNotBeforeRef = useRef(0);
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const profileMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const sessionInvalidRef = useRef(false);
 
-  const load = useCallback(async (silent = false) => {
-    if (!silent) {
+  const expireSession = useCallback(() => {
+    if (sessionInvalidRef.current) return;
+    sessionInvalidRef.current = true;
+    dashboardAbortRef.current?.abort();
+    syncAbortRef.current?.abort();
+    clientsAbortRef.current?.abort();
+    setData({ staff: [], services: [], bookings: [], items: [], schedules: [] });
+    setClients([]);
+    setAccounts([]);
+    void onLogout();
+  }, [onLogout]);
+
+  const load = useCallback(async (silent = false, respectFailureBackoff = false) => {
+    if (respectFailureBackoff && Date.now() < fullLoadRetryNotBeforeRef.current) return false;
+
+    syncAbortRef.current?.abort();
+    dashboardAbortRef.current?.abort();
+    const controller = new AbortController();
+    dashboardAbortRef.current = controller;
+    let timedOut = false;
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 10_000);
+
+    if (silent) setDashboardRefreshing(true);
+    else {
       setBusy(true);
       setError("");
     }
+
     try {
-      const response = await fetch("/api/staff/dashboard", { cache: "no-store" });
+      const params = new URLSearchParams({ date, upcomingLimit: String(upcomingLimit) });
+      if (viewer.canViewAllBookings && selectedStaff !== "all") params.set("staffId", selectedStaff);
+      const response = await fetch(`/api/staff/dashboard?${params}`, { cache: "no-store", signal: controller.signal });
       const payload = await response.json() as Dashboard & { error?: string };
+      if (rejectedStaffSession(response, payload.error)) {
+        expireSession();
+        return false;
+      }
       if (!response.ok) throw new Error(payload.error);
+      if (dashboardAbortRef.current !== controller) return false;
+
       setData(payload);
+      syncVersionRef.current = Number(payload.syncVersion ?? syncVersionRef.current);
+      lastFullLoadAtRef.current = Date.now();
+      fullLoadRetryNotBeforeRef.current = 0;
       if (!profileInitialized.current) {
         const member = payload.staff.find((entry) => entry.id === viewer.staffId);
         if (member) {
@@ -261,29 +320,100 @@ export default function StaffDashboard({
           setProfileDraft({ name: member.name, whatsappPhone: member.whatsapp_phone ? `+${member.whatsapp_phone}` : "+962" });
         }
       }
+      return true;
     } catch {
-      if (!silent) setError("تعذر تحميل بيانات تطبيق MJ الآن.");
+      const isCurrent = dashboardAbortRef.current === controller;
+      if (isCurrent && (!controller.signal.aborted || timedOut)) {
+        fullLoadRetryNotBeforeRef.current = Date.now() + FULL_LOAD_RETRY_BACKOFF_MS;
+        if (!silent) setError("تعذر تحميل بيانات تطبيق MJ الآن.");
+      }
+      return false;
     } finally {
-      if (!silent) setBusy(false);
+      window.clearTimeout(timeout);
+      if (dashboardAbortRef.current === controller) {
+        dashboardAbortRef.current = null;
+        setBusy(false);
+        setDashboardRefreshing(false);
+      }
     }
-  }, [viewer.staffId]);
+  }, [date, expireSession, selectedStaff, upcomingLimit, viewer.canViewAllBookings, viewer.staffId]);
+
+  const checkForUpdates = useCallback(async () => {
+    if (dashboardAbortRef.current) return false;
+    syncAbortRef.current?.abort();
+    const controller = new AbortController();
+    syncAbortRef.current = controller;
+    let timedOut = false;
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 5_000);
+    try {
+      const response = await fetch("/api/staff/sync", { cache: "no-store", signal: controller.signal });
+      const payload = await response.json() as { version?: number; error?: string };
+      if (rejectedStaffSession(response, payload.error)) {
+        expireSession();
+        return false;
+      }
+      if (!response.ok) throw new Error("SYNC_FAILED");
+      if (syncAbortRef.current !== controller) return false;
+      const changed = Number(payload.version ?? 0) > syncVersionRef.current;
+      const requiresFullLoad = changed || Date.now() - lastFullLoadAtRef.current >= 5 * 60_000;
+      const refreshed = requiresFullLoad ? await load(true, true) : true;
+      return changed && refreshed;
+    } catch {
+      if (syncAbortRef.current === controller && (!controller.signal.aborted || timedOut) && Date.now() - lastFullLoadAtRef.current >= 5 * 60_000) await load(true, true);
+      return false;
+    } finally {
+      window.clearTimeout(timeout);
+      if (syncAbortRef.current === controller) syncAbortRef.current = null;
+    }
+  }, [expireSession, load]);
 
   const loadClients = useCallback(async (silent = false, search = "", staffId = selectedStaff) => {
+    clientsAbortRef.current?.abort();
+    const controller = new AbortController();
+    clientsAbortRef.current = controller;
+    let timedOut = false;
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 10_000);
     if (!silent) setClientsBusy(true);
     try {
       const params = new URLSearchParams();
       if (search.trim()) params.set("q", search.trim());
       if (viewer.canViewAllBookings) params.set("staffId", staffId);
-      const response = await fetch(`/api/staff/clients?${params}`, { cache: "no-store" });
-      const payload = await response.json() as { clients?: ClientRow[] };
+      const response = await fetch(`/api/staff/clients?${params}`, { cache: "no-store", signal: controller.signal });
+      const payload = await response.json() as { clients?: ClientRow[]; error?: string };
+      if (rejectedStaffSession(response, payload.error)) {
+        expireSession();
+        return;
+      }
       if (!response.ok) throw new Error("CLIENTS_FAILED");
+      if (clientsAbortRef.current !== controller) return;
       setClients(payload.clients ?? []);
     } catch {
-      if (!silent) setError("تعذر تحميل سجل العملاء الآن.");
+      if (clientsAbortRef.current === controller && (!controller.signal.aborted || timedOut) && !silent) setError("تعذر تحميل سجل العملاء الآن.");
     } finally {
-      if (!silent) setClientsBusy(false);
+      window.clearTimeout(timeout);
+      if (clientsAbortRef.current === controller) {
+        clientsAbortRef.current = null;
+        setClientsBusy(false);
+      }
     }
-  }, [selectedStaff, viewer.canViewAllBookings]);
+  }, [expireSession, selectedStaff, viewer.canViewAllBookings]);
+
+  useEffect(() => {
+    let timer = 0;
+    const checkExpiry = () => {
+      const remaining = viewer.sessionExpiresAt - Date.now();
+      if (remaining <= 0) return expireSession();
+      timer = window.setTimeout(checkExpiry, Math.min(remaining, 60 * 60_000));
+    };
+    checkExpiry();
+    return () => window.clearTimeout(timer);
+  }, [expireSession, viewer.sessionExpiresAt]);
 
   const loadAccounts = async () => {
     if (!viewer.isOwner) return;
@@ -303,9 +433,20 @@ export default function StaffDashboard({
   };
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(timer);
+    const silent = !initialDashboardLoadRef.current;
+    initialDashboardLoadRef.current = false;
+    const timer = window.setTimeout(() => void load(silent), 0);
+    return () => {
+      window.clearTimeout(timer);
+      dashboardAbortRef.current?.abort();
+    };
   }, [load]);
+
+  useEffect(() => () => {
+    dashboardAbortRef.current?.abort();
+    syncAbortRef.current?.abort();
+    clientsAbortRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     const requestedTab = new URLSearchParams(window.location.search).get("tab") as Tab | null;
@@ -332,7 +473,12 @@ export default function StaffDashboard({
         if (Notification.permission === "denied") return setPushState("denied");
         const registration = await getStaffServiceWorker();
         if (!registration) return setPushState("unsupported");
-        const subscription = await registration.pushManager.getSubscription();
+        let subscription = await registration.pushManager.getSubscription();
+        if (subscription && !subscriptionUsesKey(subscription, payload.publicKey)) {
+          await fetch("/api/staff/push", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ endpoint: subscription.endpoint }) }).catch(() => undefined);
+          await subscription.unsubscribe().catch(() => false);
+          subscription = null;
+        }
         if (subscription && Notification.permission === "granted") {
           const syncResponse = await fetch("/api/staff/push", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subscription: subscription.toJSON() }) });
           if (!syncResponse.ok) throw new Error("PUSH_SYNC_FAILED");
@@ -349,20 +495,20 @@ export default function StaffDashboard({
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
     const onMessage = (event: MessageEvent<{ type?: string }>) => {
-      if (event.data?.type === "MJ_BOOKING_UPDATED") void load(true);
+      if (event.data?.type === "MJ_BOOKING_UPDATED") void load(true, true);
     };
     navigator.serviceWorker.addEventListener("message", onMessage);
     return () => navigator.serviceWorker.removeEventListener("message", onMessage);
   }, [load]);
 
   useEffect(() => {
-    const refresh = () => {
+    const refresh = async () => {
       if (document.visibilityState !== "visible") return;
-      void load(true);
-      if (tab === "clients") void loadClients(true, query, selectedStaff);
+      const changed = await checkForUpdates();
+      if (changed && tab === "clients") await loadClients(true, query, selectedStaff);
     };
-    const interval = window.setInterval(refresh, pushState === "enabled" ? 30_000 : 5_000);
-    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    const interval = window.setInterval(() => void refresh(), pushState === "enabled" ? 60_000 : 15_000);
+    const onVisible = () => { if (document.visibilityState === "visible") void refresh(); };
     window.addEventListener("focus", refresh);
     window.addEventListener("online", refresh);
     document.addEventListener("visibilitychange", onVisible);
@@ -371,13 +517,17 @@ export default function StaffDashboard({
       window.removeEventListener("focus", refresh);
       window.removeEventListener("online", refresh);
       document.removeEventListener("visibilitychange", onVisible);
+      syncAbortRef.current?.abort();
     };
-  }, [load, loadClients, pushState, query, selectedStaff, tab]);
+  }, [checkForUpdates, loadClients, pushState, query, selectedStaff, tab]);
 
   useEffect(() => {
     if (tab !== "clients") return;
     const timer = window.setTimeout(() => void loadClients(false, query, selectedStaff), 220);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      clientsAbortRef.current?.abort();
+    };
   }, [loadClients, query, selectedStaff, tab]);
 
   useEffect(() => {
@@ -411,28 +561,34 @@ export default function StaffDashboard({
     .filter((item) => !viewer.canViewAllBookings || selectedStaff === "all" || item.staff_id === selectedStaff),
   [data.items, selectedStaff, viewer.canViewAllBookings]);
 
+  const bookingsById = useMemo(() => new Map(data.bookings.map((booking) => [booking.id, booking])), [data.bookings]);
+
   const selectedDateItems = useMemo(() => visibleItems
     .filter((item) => item.booking_date === date)
     .filter((item) => {
       if (!query.trim()) return true;
-      const booking = data.bookings.find((entry) => entry.id === item.booking_id);
+      const booking = bookingsById.get(item.booking_id);
       return `${booking?.first_name ?? ""} ${booking?.last_name ?? ""} ${booking?.phone ?? ""} ${booking?.booking_code ?? ""}`
         .toLowerCase().includes(query.toLowerCase());
     })
     .sort((left, right) => left.start_minute - right.start_minute),
-  [visibleItems, date, query, data.bookings]);
+  [visibleItems, date, query, bookingsById]);
 
+  const todayIso = ammanToday();
   const futureItems = useMemo(() => visibleItems
     .filter((item) => ["confirmed", "arrived", "in_service"].includes(item.status))
-    .filter((item) => item.booking_date > ammanToday() || (item.booking_date === ammanToday() && item.end_minute > ammanNowMinutes()))
+    .filter((item) => item.booking_date > todayIso || (item.booking_date === todayIso && item.end_minute > ammanNowMinutes()))
     .sort((left, right) => left.booking_date.localeCompare(right.booking_date) || left.start_minute - right.start_minute),
-  [visibleItems]);
+  [todayIso, visibleItems]);
 
   const currentMember = data.staff.find((member) => member.id === viewer.staffId);
   const statusMember = data.staff.find((member) => member.id === (selectedStaff === "all" ? viewer.staffId : selectedStaff)) ?? currentMember;
-  const todayCount = visibleItems.filter((item) => item.booking_date === ammanToday()).length;
-  const completedCount = visibleItems.filter((item) => item.status === "completed").length;
+  const todayCount = visibleItems.filter((item) => item.booking_date === todayIso).length;
+  const completedCount = visibleItems.filter((item) => item.booking_date === todayIso && item.status === "completed").length;
   const nextItem = futureItems[0];
+  const nextBooking = nextItem ? bookingsById.get(nextItem.booking_id) : undefined;
+  const canLoadMoreUpcoming = Boolean(data.upcomingHasMore) && upcomingLimit < MAX_UPCOMING_ITEMS;
+  const upcomingLimitReached = Boolean(data.upcomingHasMore) && upcomingLimit >= MAX_UPCOMING_ITEMS;
 
   const updateStatus = async (staffId: string, status: Status) => {
     setActionBusy(true);
@@ -627,7 +783,13 @@ export default function StaffDashboard({
       }
       const registration = await getStaffServiceWorker();
       if (!registration) throw new Error("SERVICE_WORKER_UNAVAILABLE");
-      const subscription = await registration.pushManager.getSubscription() ?? await registration.pushManager.subscribe({
+      let subscription = await registration.pushManager.getSubscription();
+      if (subscription && !subscriptionUsesKey(subscription, publicKey)) {
+        await fetch("/api/staff/push", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ endpoint: subscription.endpoint }) }).catch(() => undefined);
+        await subscription.unsubscribe().catch(() => false);
+        subscription = null;
+      }
+      subscription ??= await registration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(publicKey),
       });
@@ -721,7 +883,7 @@ export default function StaffDashboard({
   const displayName = currentMember?.name ?? viewer.name;
 
   const appointmentCard = (item: ItemRow, showDate = false) => {
-    const booking = data.bookings.find((entry) => entry.id === item.booking_id);
+    const booking = bookingsById.get(item.booking_id);
     const service = getService(item.service_id);
     const staff = getStaff(item.staff_id);
     const staffRow = data.staff.find((member) => member.id === item.staff_id);
@@ -773,7 +935,7 @@ export default function StaffDashboard({
       <section className="mj-staff-content">
         <header className="mj-screen-heading"><p>MJ OPERATIONS</p><h1>{title}</h1></header>
         <label className="mj-screen-select"><span className="sr-only">القسم الحالي</span><select value={tab} onChange={(event) => changeTab(event.target.value as Tab)}>{navItems.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><ChevronDown size={18} /></label>
-        {viewer.canViewAllBookings && tab !== "profile" && (viewer.isOwner || tab !== "status") && <label className="mj-owner-filter"><span>عرض بيانات</span><select value={selectedStaff} onChange={(event) => setSelectedStaff(event.target.value)}>{tab !== "status" && <option value="all">فريق MJ كامل</option>}{data.staff.filter((member) => member.id !== "reception").map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label>}
+        {viewer.canViewAllBookings && tab !== "profile" && (viewer.isOwner || tab !== "status") && <label className="mj-owner-filter"><span>عرض بيانات</span><select value={selectedStaff} onChange={(event) => { setSelectedStaff(event.target.value); setUpcomingLimit(UPCOMING_PAGE_SIZE); }}>{tab !== "status" && <option value="all">فريق MJ كامل</option>}{data.staff.filter((member) => member.id !== "reception").map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label>}
 
         {error && <div className="mj-app-alert error">{error}</div>}
         {notice && <div className="mj-app-alert success"><Check size={18} />{notice}</div>}
@@ -781,20 +943,30 @@ export default function StaffDashboard({
         {busy ? <div className="mj-app-loading"><LoaderCircle className="spin" size={34} /><span>جارٍ ترتيب يومك…</span></div> : tab === "schedule" ? <>
           <section className="mj-next-card">
             <div className="mj-card-kicker"><span>الموعد التالي</span><Scissors size={18} /></div>
-            {nextItem ? <div className="mj-next-content"><span className="mj-next-check"><CalendarClock size={28} /></span><div><small>{displayDate(nextItem.booking_date, true)} · {minutesToTime(nextItem.start_minute, "ar")}</small><h2>{data.bookings.find((booking) => booking.id === nextItem.booking_id)?.first_name} {data.bookings.find((booking) => booking.id === nextItem.booking_id)?.last_name}</h2><p>{getService(nextItem.service_id)?.name.ar}</p></div></div> : <div className="mj-empty-next"><span><Check size={32} /></span><h2>لا يوجد موعد قادم.</h2><p>اليوم مرتب، وستظهر أي حجز جديد هنا لحظيًا.</p></div>}
+            {nextItem ? <div className="mj-next-content"><span className="mj-next-check"><CalendarClock size={28} /></span><div><small>{displayDate(nextItem.booking_date, true)} · {minutesToTime(nextItem.start_minute, "ar")}</small><h2>{nextBooking?.first_name} {nextBooking?.last_name}</h2><p>{getService(nextItem.service_id)?.name.ar}</p></div></div> : <div className="mj-empty-next"><span><Check size={32} /></span><h2>لا يوجد موعد قادم.</h2><p>اليوم مرتب، وستظهر أي حجز جديد هنا لحظيًا.</p></div>}
           </section>
 
-          <div className="mj-stat-grid"><article><small>مواعيد اليوم</small><strong>{todayCount}</strong></article><article><small>القادمة</small><strong>{futureItems.length}</strong></article><article><small>عملاء مكتملون</small><strong>{completedCount}</strong></article></div>
+          <div className="mj-stat-grid"><article><small>مواعيد اليوم</small><strong>{todayCount}</strong></article><article><small>القادمة</small><strong>{futureItems.length}{data.upcomingHasMore ? "+" : ""}</strong></article><article><small>مكتمل اليوم</small><strong>{completedCount}</strong></article></div>
 
           <section className="mj-timeline-card">
             <div className="mj-section-title"><div><small>TODAY TIMELINE</small><h2>{displayDate(date)}</h2></div><CalendarDays size={27} /></div>
-            <div className="mj-date-controls"><button onClick={() => setDate(shiftDate(date, 1))} aria-label="اليوم التالي"><ChevronRight size={20} /></button><button onClick={() => setDate(ammanToday())}>اليوم</button><button onClick={() => setDate(shiftDate(date, -1))} aria-label="اليوم السابق"><ChevronLeft size={20} /></button></div>
+            <div className="mj-date-controls"><button onClick={() => setDate(shiftIsoDate(date, 1))} aria-label="اليوم التالي"><ChevronRight size={20} /></button><button onClick={() => setDate(ammanToday())}>اليوم</button><button onClick={() => setDate(shiftIsoDate(date, -1))} aria-label="اليوم السابق"><ChevronLeft size={20} /></button></div>
             <label className="mj-search"><Search size={20} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ابحث بالاسم، الرقم أو رقم الحجز" /></label>
             <div className="mj-list">{selectedDateItems.map((item) => appointmentCard(item))}{!selectedDateItems.length && <div className="mj-list-empty"><CalendarDays size={40} /><h3>لا توجد مواعيد في هذا اليوم</h3><p>ستظهر المواعيد هنا فور تأكيدها.</p></div>}</div>
           </section>
         </> : tab === "upcoming" ? <section className="mj-panel-card">
           <div className="mj-section-title"><div><small>UPCOMING BOOKINGS</small><h2>الحجوزات القادمة</h2></div><CalendarClock size={28} /></div>
-          <div className="mj-list">{futureItems.map((item) => appointmentCard(item, true))}{!futureItems.length && <div className="mj-list-empty tall"><CalendarDays size={44} /><h3>لا توجد حجوزات قادمة</h3><p>ستظهر المواعيد الجديدة هنا تلقائيًا.</p></div>}</div>
+          <div className="mj-list">
+            {futureItems.map((item) => appointmentCard(item, true))}
+            {!futureItems.length && <div className="mj-list-empty tall"><CalendarDays size={44} /><h3>لا توجد حجوزات قادمة</h3><p>ستظهر المواعيد الجديدة هنا تلقائيًا.</p></div>}
+            {canLoadMoreUpcoming && <button
+              type="button"
+              disabled={dashboardRefreshing}
+              onClick={() => setUpcomingLimit((current) => Math.min(MAX_UPCOMING_ITEMS, current + UPCOMING_PAGE_SIZE))}
+              className="mj-load-more"
+            >{dashboardRefreshing ? "جارٍ التحميل…" : "عرض المزيد من الحجوزات"}</button>}
+            {upcomingLimitReached && <p className="mj-pagination-note">تم عرض أقرب {MAX_UPCOMING_ITEMS} حجز قادم. استخدم شاشة اليوم للوصول إلى تاريخ محدد.</p>}
+          </div>
         </section> : tab === "clients" ? <section className="mj-panel-card">
           <div className="mj-section-title"><div><small>CLIENT HISTORY</small><h2>سجل العملاء</h2></div><UsersRound size={28} /></div>
           <label className="mj-search"><Search size={20} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ابحث بالاسم الكامل أو رقم الجوال" /></label>
@@ -808,7 +980,7 @@ export default function StaffDashboard({
               <button className={statusMember?.status === "break" ? "active break" : ""} disabled={actionBusy || !statusMember} onClick={() => statusMember && void updateStatus(statusMember.id, "break")}><CirclePause size={27} /><strong>بريك</strong><span>إغلاق مؤقت</span></button>
               <button className={statusMember?.status === "off_today" ? "active off" : ""} disabled={actionBusy || !statusMember} onClick={() => statusMember && void updateStatus(statusMember.id, "off_today")}><UserMinus size={27} /><strong>إجازة</strong><span>إغلاق اليوم</span></button>
             </div>
-            <p className="mj-status-note">التغيير يُحفظ مباشرة، والتطبيق يفحص الحجوزات والحالة تلقائيًا كل 5 ثوانٍ.</p>
+            <p className="mj-status-note">التغيير يُحفظ مباشرة، والتطبيق يحدّث الحجوزات بالإشعارات؛ وعند غيابها يفحصها احتياطيًا كل 15 ثانية.</p>
           </section>
 
           <section className="mj-hours-card">

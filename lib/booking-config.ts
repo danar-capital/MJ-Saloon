@@ -111,11 +111,11 @@ export const bookingStaff: BookingStaff[] = [
 ];
 
 export const staffOperationalDefaults: Record<string, StaffOperationalDefault> = {
-  bahaa: { startMinute: 12 * 60, endMinute: 21 * 60, whatsappPhone: "962798826453" },
-  m7m7: { startMinute: 12 * 60, endMinute: 21 * 60, whatsappPhone: "962791918334" },
-  mustafa: { startMinute: 12 * 60, endMinute: 23 * 60, whatsappPhone: "962796152602" },
-  amro: { startMinute: 12 * 60, endMinute: 23 * 60, whatsappPhone: "962796174628" },
-  osaid: { startMinute: 12 * 60, endMinute: 23 * 60, whatsappPhone: "962797886326" },
+  bahaa: { startMinute: 12 * 60, endMinute: 21 * 60 },
+  m7m7: { startMinute: 12 * 60, endMinute: 21 * 60 },
+  mustafa: { startMinute: 12 * 60, endMinute: 23 * 60 },
+  amro: { startMinute: 12 * 60, endMinute: 23 * 60 },
+  osaid: { startMinute: 12 * 60, endMinute: 23 * 60 },
   ali: { startMinute: 12 * 60, endMinute: 23 * 60 },
   aows: { startMinute: 12 * 60, endMinute: 23 * 60 },
   mera: { startMinute: 12 * 60, endMinute: 23 * 60 },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { browserSupportsWebAuthn, platformAuthenticatorIsAvailable, startAuthentication, type PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
 import { Eye, EyeOff, Fingerprint, LoaderCircle, LogIn, LogOut, ShieldCheck } from "lucide-react";
 import Link from "next/link";
@@ -12,18 +12,26 @@ import { findStaffServiceWorker, registerStaffServiceWorker } from "@/lib/staff-
 const ACTIVE_SESSION_KEY = "mj-team-active-session";
 const REMEMBER_DEVICE_KEY = "mj-team-remember-device";
 
-async function removeDevicePushSubscription() {
-  if (!("PushManager" in window) || !("Notification" in window) || Notification.permission !== "granted") return;
-  const registration = await findStaffServiceWorker();
-  const subscription = await registration?.pushManager.getSubscription().catch(() => null);
-  if (!subscription) return;
-  await fetch("/api/staff/push", {
-    method: "DELETE",
+async function detachDevicePushSubscription() {
+  if (!("PushManager" in window) || !("serviceWorker" in navigator)) return null;
+  try {
+    const registration = await findStaffServiceWorker();
+    const subscription = await registration?.pushManager.getSubscription().catch(() => null);
+    if (!subscription) return null;
+    await subscription.unsubscribe().catch(() => false);
+    return subscription.endpoint;
+  } catch {
+    return null;
+  }
+}
+
+async function closeStaffSession(pushEndpoint?: string | null, timeoutMs = 3_000) {
+  await fetch("/api/staff/logout", {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ endpoint: subscription.endpoint }),
-    signal: AbortSignal.timeout(700),
+    body: JSON.stringify({ pushEndpoint: pushEndpoint ?? null }),
+    signal: AbortSignal.timeout(timeoutMs),
   }).catch(() => undefined);
-  await subscription.unsubscribe().catch(() => false);
 }
 
 export default function StaffPortal() {
@@ -37,11 +45,20 @@ export default function StaffPortal() {
   const [standalone, setStandalone] = useState<boolean | null>(null);
   const [isMobile, setIsMobile] = useState(false);
   const [biometricSupported, setBiometricSupported] = useState(false);
+  const startupCleanupRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     const environmentTimer = window.setTimeout(() => {
       const ipadDesktopMode = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
-      setStandalone(window.matchMedia("(display-mode: standalone)").matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone));
+      const installed = window.matchMedia("(display-mode: standalone)").matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+      setStandalone(installed);
+      if (installed) {
+        const url = new URL(window.location.href);
+        if (url.searchParams.get("app") !== "1") {
+          url.searchParams.set("app", "1");
+          window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+        }
+      }
       setIsMobile(/android|iphone|ipad|ipod/i.test(navigator.userAgent) || ipadDesktopMode);
     }, 0);
     return () => window.clearTimeout(environmentTimer);
@@ -59,19 +76,35 @@ export default function StaffPortal() {
       try {
         if (remembered || activeThisWindow) {
           const response = await fetch("/api/staff/session", { cache: "no-store", signal: AbortSignal.timeout(1_200) });
-          const payload = response.ok ? await response.json() as { viewer?: StaffViewer } : null;
-          setViewer(payload?.viewer ?? null);
-          if (!payload?.viewer) {
+          if (response.status === 401) {
+            const cleanup = (async () => {
+              const pushEndpoint = await detachDevicePushSubscription();
+              await closeStaffSession(pushEndpoint);
+            })();
+            startupCleanupRef.current = cleanup;
+            void cleanup;
             window.sessionStorage.removeItem(ACTIVE_SESSION_KEY);
             window.localStorage.removeItem(REMEMBER_DEVICE_KEY);
             setRememberDevice(false);
+            setViewer(null);
+          } else {
+            if (!response.ok) throw new Error("SESSION_CHECK_FAILED");
+            const payload = await response.json() as { viewer?: StaffViewer };
+            if (!payload.viewer) throw new Error("SESSION_CHECK_FAILED");
+            setViewer(payload.viewer);
           }
         } else {
-          await removeDevicePushSubscription();
-          await fetch("/api/staff/logout", { method: "POST", signal: AbortSignal.timeout(700) }).catch(() => undefined);
+          setViewer(null);
+          const cleanup = (async () => {
+            const pushEndpoint = await detachDevicePushSubscription();
+            await closeStaffSession(pushEndpoint);
+          })();
+          startupCleanupRef.current = cleanup;
+          void cleanup;
         }
       } catch {
         setViewer(null);
+        setError("تعذر التحقق من الجلسة الآن. تأكد من الإنترنت ثم سجّل الدخول مجددًا.");
       } finally {
         const remaining = Math.max(0, 340 - (performance.now() - startedAt));
         window.setTimeout(() => setChecking(false), remaining);
@@ -94,9 +127,11 @@ export default function StaffPortal() {
     event.preventDefault();
     setBusy(true); setError("");
     try {
+      await startupCleanupRef.current;
       const response = await fetch("/api/staff/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...credentials, remember: rememberDevice }) });
       const payload = await response.json() as { viewer?: StaffViewer; error?: string };
       if (!response.ok || !payload.viewer) throw new Error(payload.error ?? "LOGIN_FAILED");
+      await detachDevicePushSubscription();
       window.sessionStorage.setItem(ACTIVE_SESSION_KEY, "1");
       if (rememberDevice) window.localStorage.setItem(REMEMBER_DEVICE_KEY, "1");
       else window.localStorage.removeItem(REMEMBER_DEVICE_KEY);
@@ -110,13 +145,17 @@ export default function StaffPortal() {
   };
 
   const logout = async () => {
-    await removeDevicePushSubscription();
-    await fetch("/api/staff/logout", { method: "POST" }).catch(() => undefined);
     window.sessionStorage.removeItem(ACTIVE_SESSION_KEY);
     window.localStorage.removeItem(REMEMBER_DEVICE_KEY);
     setRememberDevice(false);
     setViewer(null);
     setCredentials({ username: "", password: "" });
+    const cleanup = (async () => {
+      const pushEndpoint = await detachDevicePushSubscription();
+      await closeStaffSession(pushEndpoint);
+    })();
+    startupCleanupRef.current = cleanup;
+    await cleanup;
   };
 
   const passkeyLogin = async () => {
@@ -124,6 +163,7 @@ export default function StaffPortal() {
     setBusy(true);
     setError("");
     try {
+      await startupCleanupRef.current;
       const optionsResponse = await fetch("/api/staff/passkeys/authenticate/options", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -139,6 +179,7 @@ export default function StaffPortal() {
       });
       const verifyPayload = await verifyResponse.json() as { viewer?: StaffViewer; error?: string };
       if (!verifyResponse.ok || !verifyPayload.viewer) throw new Error(verifyPayload.error ?? "PASSKEY_VERIFY_FAILED");
+      await detachDevicePushSubscription();
       window.sessionStorage.setItem(ACTIVE_SESSION_KEY, "1");
       if (rememberDevice) window.localStorage.setItem(REMEMBER_DEVICE_KEY, "1");
       else window.localStorage.removeItem(REMEMBER_DEVICE_KEY);

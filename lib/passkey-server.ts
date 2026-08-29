@@ -33,7 +33,7 @@ export async function savePasskeyChallenge(accountId: string, purpose: "registra
   const id = crypto.randomUUID();
   const expiresAt = Date.now() + 5 * 60_000;
   await db.batch([
-    db.prepare("DELETE FROM staff_passkey_challenges WHERE expires_at < ? OR (account_id = ? AND purpose = ?)").bind(Date.now(), accountId, purpose),
+    db.prepare("DELETE FROM staff_passkey_challenges WHERE expires_at < ?").bind(Date.now()),
     db.prepare("INSERT INTO staff_passkey_challenges (id, account_id, challenge, purpose, expires_at) VALUES (?, ?, ?, ?, ?)").bind(id, accountId, challenge, purpose, expiresAt),
   ]);
   return { id, expiresAt };

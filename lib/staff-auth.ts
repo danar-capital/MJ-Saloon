@@ -1,7 +1,7 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
 import { ensureCatalogSeed, getD1, normalizePhone } from "@/lib/booking-server";
+import { env } from "cloudflare:workers";
 
-const ownerEmails = new Set(["danarcapital9@gmail.com"]);
 const SESSION_COOKIE = "mj_staff_session_v2";
 const LEGACY_SESSION_COOKIE = "mj_staff_session";
 const STANDARD_SESSION_SECONDS = 60 * 60 * 12;
@@ -74,6 +74,16 @@ export function normalizeStaffUsername(value: string) {
   return value.trim().toLowerCase();
 }
 
+function ownerEmails() {
+  const configured = (env as unknown as Record<string, string | undefined>).STAFF_OWNER_EMAILS ?? "";
+  return new Set(
+    configured
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
 function cookieValue(request: Request, name: string) {
   const header = request.headers.get("cookie") ?? "";
   return header.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) ?? "";
@@ -99,12 +109,12 @@ export function assertSameOrigin(request: Request) {
 
 export async function assertOwner() {
   const user = await getChatGPTUser();
-  if (!user || !ownerEmails.has(user.email.toLowerCase())) throw new Error("STAFF_UNAUTHORIZED");
+  if (!user || !ownerEmails().has(user.email.toLowerCase())) throw new Error("STAFF_UNAUTHORIZED");
   return user;
 }
 
 export function isOwnerEmail(email: string) {
-  return ownerEmails.has(email.toLowerCase());
+  return ownerEmails().has(email.toLowerCase());
 }
 
 export async function saveStaffAccount(input: {
@@ -136,6 +146,7 @@ export async function saveStaffAccount(input: {
     db.prepare("DELETE FROM staff_passkey_challenges WHERE account_id = (SELECT id FROM staff_accounts WHERE staff_id = ?)").bind(input.staffId),
     db.prepare("DELETE FROM staff_push_subscriptions WHERE account_id = (SELECT id FROM staff_accounts WHERE staff_id = ?)").bind(input.staffId),
     db.prepare("DELETE FROM staff_push_outbox WHERE staff_id = ? AND delivered_at IS NULL").bind(input.staffId),
+    db.prepare("INSERT INTO system_events (type, payload) VALUES ('staff.account_saved', ?)").bind(JSON.stringify({ staffId: input.staffId, role })),
   ]);
   return { staffId: input.staffId, username, role };
 }
@@ -195,18 +206,20 @@ export async function createStaffSession(accountId: string, remembered = false) 
   };
 }
 
-export async function getStaffSession(request: Request): Promise<StaffViewer | null> {
+export async function getStaffSession(request: Request, touchSession = true): Promise<StaffViewer | null> {
   const token = cookieValue(request, SESSION_COOKIE);
   if (!token) return null;
   const tokenHash = await sha256(token);
   const db = getD1();
   const row = await db.prepare("SELECT sa.id AS account_id, sa.staff_id, sa.username, sa.role, sa.active, sa.must_change_credentials, ss.id AS session_id, ss.expires_at, COALESCE(NULLIF(sm.profile_name, ''), sm.name) AS name FROM staff_sessions ss JOIN staff_accounts sa ON sa.id = ss.account_id JOIN staff_members sm ON sm.id = sa.staff_id WHERE ss.token_hash = ?")
     .bind(tokenHash).first<{ account_id: string; staff_id: string; username: string; role: "owner" | "staff"; active: number; must_change_credentials: number; session_id: string; expires_at: number; name: string }>();
-  if (!row || !row.active || row.expires_at < Date.now()) {
-    if (row?.session_id) await db.prepare("DELETE FROM staff_sessions WHERE id = ?").bind(row.session_id).run();
-    return null;
+  // Keep an expired row just long enough for /api/staff/logout to resolve its
+  // account and atomically remove this device's push endpoint. Expired rows
+  // remain unusable and are purged on the next successful login.
+  if (!row || !row.active || row.expires_at < Date.now()) return null;
+  if (touchSession) {
+    await db.prepare("UPDATE staff_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ? AND last_seen_at < datetime('now', '-5 minutes')").bind(row.session_id).run();
   }
-  await db.prepare("UPDATE staff_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ? AND last_seen_at < datetime('now', '-5 minutes')").bind(row.session_id).run();
   return {
     accountId: row.account_id,
     staffId: row.staff_id,
@@ -247,27 +260,41 @@ export async function changeOwnStaffCredentials(input: {
   }
   const salt = newPassword ? randomToken(18) : account.password_salt;
   const hash = newPassword ? await passwordDigest(newPassword, salt) : account.password_hash;
-  await db.batch([
+  const credentialChangeStatements: D1PreparedStatement[] = [
     db.prepare("UPDATE staff_accounts SET username = ?, password_salt = ?, password_hash = ?, must_change_credentials = 0, failed_attempts = 0, locked_until = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
       .bind(username, salt, hash, account.id),
     db.prepare("DELETE FROM staff_sessions WHERE account_id = ?").bind(account.id),
     db.prepare("DELETE FROM staff_passkey_challenges WHERE account_id = ?").bind(account.id),
     db.prepare("INSERT INTO system_events (type, actor_id, payload) VALUES ('staff.credentials_changed', ?, ?)")
       .bind(account.id, JSON.stringify({ usernameChanged: username !== account.username, passwordChanged: Boolean(newPassword) })),
-  ]);
+  ];
+  if (newPassword) {
+    credentialChangeStatements.push(
+      db.prepare("DELETE FROM staff_passkeys WHERE account_id = ?").bind(account.id),
+      db.prepare("DELETE FROM staff_push_subscriptions WHERE account_id = ?").bind(account.id),
+    );
+  }
+  await db.batch(credentialChangeStatements);
   return createStaffSession(account.id, input.remembered);
 }
 
-export async function requireStaffSession(request: Request, ownerOnly = false, allowTemporaryCredentials = false) {
-  const viewer = await getStaffSession(request);
+export async function requireStaffSession(request: Request, ownerOnly = false, allowTemporaryCredentials = false, touchSession = true) {
+  const viewer = await getStaffSession(request, touchSession);
   if (!viewer || (ownerOnly && !viewer.isOwner)) throw new Error("STAFF_UNAUTHORIZED");
   if (viewer.mustChangeCredentials && !allowTemporaryCredentials) throw new Error("STAFF_CREDENTIAL_CHANGE_REQUIRED");
   return viewer;
 }
 
-export async function logoutStaff(request: Request) {
+export async function logoutStaff(request: Request, pushEndpoint?: string | null) {
   const token = cookieValue(request, SESSION_COOKIE);
   if (!token) return;
   const db = getD1();
-  await db.prepare("DELETE FROM staff_sessions WHERE token_hash = ?").bind(await sha256(token)).run();
+  const tokenHash = await sha256(token);
+  const statements: D1PreparedStatement[] = [];
+  if (pushEndpoint) {
+    statements.push(db.prepare("DELETE FROM staff_push_subscriptions WHERE endpoint = ? AND account_id = (SELECT account_id FROM staff_sessions WHERE token_hash = ?)")
+      .bind(pushEndpoint, tokenHash));
+  }
+  statements.push(db.prepare("DELETE FROM staff_sessions WHERE token_hash = ?").bind(tokenHash));
+  await db.batch(statements);
 }

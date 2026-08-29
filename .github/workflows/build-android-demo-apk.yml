@@ -1,0 +1,47 @@
+name: Build Android demo APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "android-demo/**"
+      - ".github/workflows/build-android-demo-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install Android SDK components
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" >/dev/null
+      - name: Extract Android wrapper source
+        run: |
+          mkdir -p android-demo
+          unzip -q android-demo-source.zip -d android-demo
+      - name: Build unsigned release
+        working-directory: android-demo
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace :app:assembleRelease
+      - name: Align APK and collect signer
+        run: |
+          mkdir -p android-demo-artifact
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -p -f 4 \
+            android-demo/app/build/outputs/apk/release/app-release-unsigned.apk \
+            android-demo-artifact/MJ-Team-Demo-aligned-unsigned.apk
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" android-demo-artifact/apksigner.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mj-team-demo-unsigned
+          path: android-demo-artifact/*
+          if-no-files-found: error
+          retention-days: 1

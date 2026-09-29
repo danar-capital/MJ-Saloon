@@ -1,0 +1,83 @@
+name: Verify MJ and deploy to Cloudflare
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mj-cloudflare-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Check production connection without exposing credentials
+        id: connection
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_WORKER_NAME: ${{ vars.CLOUDFLARE_WORKER_NAME }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
+          CLOUDFLARE_R2_BUCKET_NAME: ${{ vars.CLOUDFLARE_R2_BUCKET_NAME }}
+          CLOUDFLARE_PUBLIC_HOSTNAME: ${{ vars.CLOUDFLARE_PUBLIC_HOSTNAME }}
+          CLOUDFLARE_CUTOVER_READY: ${{ vars.CLOUDFLARE_CUTOVER_READY }}
+        run: |
+          missing=()
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_WORKER_NAME CLOUDFLARE_D1_DATABASE_ID CLOUDFLARE_R2_BUCKET_NAME CLOUDFLARE_PUBLIC_HOSTNAME; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          [[ "$CLOUDFLARE_CUTOVER_READY" == "true" ]] || missing+=("CLOUDFLARE_CUTOVER_READY=true")
+          if (( ${#missing[@]} )); then
+            printf '::warning::Cloudflare NOT DEPLOYED. Missing configuration: %s\n' "${missing[*]}"
+            printf '## Cloudflare: NOT DEPLOYED\n\nMissing configuration: `%s`. See CLOUDFLARE_DEPLOYMENT.md. Existing hosting and data are unchanged.\n' "${missing[*]}" >> "$GITHUB_STEP_SUMMARY"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install the locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Build and run every verification test
+        env:
+          SITES_BUILD_TIMEOUT: 8m
+        run: npm test
+      - name: Bind the verified artifact to existing Cloudflare resources
+        if: steps.connection.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_WORKER_NAME: ${{ vars.CLOUDFLARE_WORKER_NAME }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
+          CLOUDFLARE_R2_BUCKET_NAME: ${{ vars.CLOUDFLARE_R2_BUCKET_NAME }}
+          CLOUDFLARE_PUBLIC_HOSTNAME: ${{ vars.CLOUDFLARE_PUBLIC_HOSTNAME }}
+          CLOUDFLARE_CUTOVER_READY: ${{ vars.CLOUDFLARE_CUTOVER_READY }}
+          MJ_RELEASE_SHA: ${{ github.sha }}
+        run: |
+          node scripts/prepare-cloudflare-deploy.mjs
+          ./node_modules/.bin/wrangler deploy --dry-run
+      - name: Deploy the same verified commit
+        if: steps.connection.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: ./node_modules/.bin/wrangler deploy
+      - name: Verify the live commit and public routes
+        if: steps.connection.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_PUBLIC_HOSTNAME: ${{ vars.CLOUDFLARE_PUBLIC_HOSTNAME }}
+          MJ_RELEASE_SHA: ${{ github.sha }}
+        run: node scripts/verify-cloudflare-release.mjs

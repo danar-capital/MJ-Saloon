@@ -1,11 +1,14 @@
-/** Cloudflare Worker entry point for the vinext-starter template. */
+/** Cloudflare Worker entry point for the MJ website and staff PWA. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { drainStaffPushOutbox, markPushCronHeartbeat } from "../lib/push-server";
+import { stripSitesIdentityHeaders } from "../lib/hosting-security";
 
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  MJ_HOSTING?: string;
+  MJ_RELEASE_SHA?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -30,15 +33,23 @@ function secureResponse(request: Request, response: Response) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
-// Image security config. SVG sources with .svg extension auto-skip the
-// optimization endpoint on the client side (served directly, no proxy).
-// To route SVGs through the optimizer (with security headers), set
-// dangerouslyAllowSVG: true in next.config.js and uncomment below:
-// const imageConfig: ImageConfig = { dangerouslyAllowSVG: true };
-
+// SVG sources skip image optimization by default. Keep the existing image
+// security policy and platform optimizer when moving between hosting targets.
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    if (env.MJ_HOSTING === "cloudflare") {
+      // A direct Worker has no trusted ChatGPT identity-injection gateway.
+      // Normal username/password staff sessions and private install tokens remain.
+      request = stripSitesIdentityHeaders(request);
+      if (url.pathname === "/_meta/release") {
+        if (request.method !== "GET") return secureResponse(request, new Response(null, { status: 405, headers: { Allow: "GET" } }));
+        return secureResponse(request, Response.json(
+          { hosting: "cloudflare", commit: env.MJ_RELEASE_SHA ?? null },
+          { headers: { "Cache-Control": "no-store" } },
+        ));
+      }
+    }
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];

@@ -27,8 +27,10 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# Local environment and Wrangler secrets must never be committed.
 .env*
+.dev.vars*
+/.cloudflare/
 
 # vercel
 .vercel
